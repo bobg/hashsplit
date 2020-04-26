@@ -10,6 +10,7 @@ import (
 // Splitter hashsplits its input according to a given RollSum algorithm.
 type Splitter struct {
 	// E holds any error encountered during Split while reading the input.
+	// Read it after the channel produced by Split closes.
 	E error
 
 	// RollSum state.
@@ -21,6 +22,11 @@ type Splitter struct {
 	windowSizeBits int
 	splitBits      int
 	wofs           uint32
+}
+
+type Chunk struct {
+	Bytes []byte
+	Bits  int
 }
 
 // Split hashsplits its input using the rolling checksum from go4.org/rollsum.
@@ -43,7 +49,7 @@ type Splitter struct {
 //   }
 //
 // See Splitter.Split for more detail.
-func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
+func Split(ctx context.Context, r io.Reader) (<-chan Chunk, func() error) {
 	s := &Splitter{
 		// xxx temporary
 		windowSizeBits: 6,
@@ -75,8 +81,8 @@ func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
 //   if s.E != nil {
 //     ...handle error...
 //   }
-func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
-	ch := make(chan []byte)
+func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
+	ch := make(chan Chunk)
 
 	go func() {
 		defer close(ch)
@@ -91,10 +97,11 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
 			c, err := rr.ReadByte()
 			if err == io.EOF {
 				if len(chunk) > 0 {
+					tz, _ := s.checkSplit()
 					select {
 					case <-ctx.Done():
 						s.E = ctx.Err()
-					case ch <- chunk:
+					case ch <- Chunk{Bytes: chunk, Bits: tz}:
 					}
 				}
 				return
@@ -104,13 +111,13 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
 				return
 			}
 			chunk = append(chunk, c)
-			s.Roll(c)
-			if s.OnSplit() {
+			s.roll(c)
+			if tz, shouldSplit := s.checkSplit(); shouldSplit {
 				select {
 				case <-ctx.Done():
 					s.E = ctx.Err()
 					return
-				case ch <- chunk:
+				case ch <- Chunk{Bytes: chunk, Bits: tz}:
 					chunk = []byte{}
 				}
 			}
@@ -128,7 +135,7 @@ func (s *Splitter) Reset() {
 	s.wofs = 0
 }
 
-func (s *Splitter) Roll(add byte) {
+func (s *Splitter) roll(add byte) {
 	ws := s.windowSize()
 	drop := uint32(s.window[s.wofs])
 
@@ -141,8 +148,9 @@ func (s *Splitter) Roll(add byte) {
 	s.wofs = (s.wofs + 1) & (ws - 1)
 }
 
-func (s *Splitter) OnSplit() bool {
-	return bits.TrailingZeros32(^s.s2) >= s.splitBits
+func (s *Splitter) checkSplit() (int, bool) {
+	tz := bits.TrailingZeros32(^s.s2)
+	return tz, tz >= s.splitBits
 }
 
 func (s *Splitter) windowSize() uint32 {

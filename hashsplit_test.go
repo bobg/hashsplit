@@ -24,7 +24,7 @@ func TestSplit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(chunk, want) {
+		if !bytes.Equal(chunk.Bytes, want) {
 			t.Errorf("mismatch in chunk %d", i)
 		}
 	}
