@@ -28,6 +28,10 @@ func TestSplit(t *testing.T) {
 			t.Errorf("mismatch in chunk %d", i)
 		}
 	}
+	const wantChunks = 27
+	if i != wantChunks {
+		t.Errorf("got %d chunks, want %d", i, wantChunks)
+	}
 	if err := errfn(); err != nil {
 		t.Fatal(err)
 	}

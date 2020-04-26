@@ -4,15 +4,13 @@ import (
 	"bufio"
 	"context"
 	"io"
-
-	"go4.org/rollsum"
 )
 
 // Splitter hashsplits its input according to a given RollSum algorithm.
 type Splitter struct {
 	// R is the RollSum that tracks the rolling checksum
 	// and identifies boundaries for splitting.
-	R RollSum
+	R *RollSum
 
 	// E holds any error encountered during Split while reading the input.
 	E error
@@ -39,7 +37,7 @@ type Splitter struct {
 //
 // See Splitter.Split for more detail.
 func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
-	s := &Splitter{R: rollsum.New()}
+	s := &Splitter{R: NewRollSum()}
 	ch := s.Split(ctx, r)
 	return ch, func() error { return s.E }
 }
