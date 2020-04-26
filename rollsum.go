@@ -12,7 +12,7 @@ type RollSum struct {
 	s1, s2         uint32
 	window         []byte
 	windowSizeBits int
-	n              int
+	splitBits      int
 	wofs           uint32
 }
 
@@ -20,7 +20,7 @@ func NewRollSum() *RollSum {
 	rs := &RollSum{
 		// xxx temporary
 		windowSizeBits: 6,
-		n:              13,
+		splitBits:      13,
 	}
 	rs.Reset()
 	return rs
@@ -35,7 +35,7 @@ func (rs *RollSum) Reset() {
 }
 
 func (rs *RollSum) OnSplit() bool {
-	return bits.TrailingZeros32(^rs.s2) >= rs.n
+	return bits.TrailingZeros32(^rs.s2) >= rs.splitBits
 }
 
 func (rs *RollSum) Roll(add byte) {

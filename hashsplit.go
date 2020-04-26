@@ -82,7 +82,6 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
 					select {
 					case <-ctx.Done():
 						s.E = ctx.Err()
-						return
 					case ch <- chunk:
 					}
 				}
