@@ -4,16 +4,23 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"math/bits"
 )
 
 // Splitter hashsplits its input according to a given RollSum algorithm.
 type Splitter struct {
-	// R is the RollSum that tracks the rolling checksum
-	// and identifies boundaries for splitting.
-	R *RollSum
-
 	// E holds any error encountered during Split while reading the input.
 	E error
+
+	// RollSum state.
+	// Adapted from go4.mod/rollsum
+	// (which in turn is adapted from https://github.com/apenwarr/bup,
+	// which is adapted from librsync).
+	s1, s2         uint32
+	window         []byte
+	windowSizeBits int
+	splitBits      int
+	wofs           uint32
 }
 
 // Split hashsplits its input using the rolling checksum from go4.org/rollsum.
@@ -37,7 +44,12 @@ type Splitter struct {
 //
 // See Splitter.Split for more detail.
 func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
-	s := &Splitter{R: NewRollSum()}
+	s := &Splitter{
+		// xxx temporary
+		windowSizeBits: 6,
+		splitBits:      13,
+	}
+	s.Reset()
 	ch := s.Split(ctx, r)
 	return ch, func() error { return s.E }
 }
@@ -92,8 +104,8 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
 				return
 			}
 			chunk = append(chunk, c)
-			s.R.Roll(c)
-			if s.R.OnSplit() {
+			s.Roll(c)
+			if s.OnSplit() {
 				select {
 				case <-ctx.Done():
 					s.E = ctx.Err()
@@ -106,4 +118,37 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
 	}()
 
 	return ch
+}
+
+func (s *Splitter) Reset() {
+	ws := s.windowSize()
+	s.s1 = ws * s.charOffset()
+	s.s2 = s.s1 * (ws - 1)
+	s.window = make([]byte, ws)
+	s.wofs = 0
+}
+
+func (s *Splitter) Roll(add byte) {
+	ws := s.windowSize()
+	drop := uint32(s.window[s.wofs])
+
+	s.s1 += uint32(add)
+	s.s1 -= drop
+	s.s2 += s.s1
+	s.s2 -= ws * (drop + s.charOffset())
+
+	s.window[s.wofs] = add
+	s.wofs = (s.wofs + 1) & (ws - 1)
+}
+
+func (s *Splitter) OnSplit() bool {
+	return bits.TrailingZeros32(^s.s2) >= s.splitBits
+}
+
+func (s *Splitter) windowSize() uint32 {
+	return 1 << s.windowSizeBits
+}
+
+func (s *Splitter) charOffset() uint32 {
+	return s.windowSize()/2 - 1
 }
