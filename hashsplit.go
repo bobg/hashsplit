@@ -9,24 +9,39 @@ import (
 
 // Splitter hashsplits its input according to a given RollSum algorithm.
 type Splitter struct {
+	// Reset says whether to reset the rollsum state to zero at the beginning of each new chunk.
+	// The default is false (as in go4.org/rollsum),
+	// but that means that a chunk's boundary is determined in part by the chunks that precede it.
+	Reset bool
+
+	// MinSize is the minimum chunk size. Only the final chunk may be smaller than this.
+	// The default is zero, meaning chunks may be any size.
+	MinSize int
+
+	// SplitBits is the number of trailing bits in the rolling checksum that must be set to produce a chunk.
+	SplitBits int
+
 	// E holds any error encountered during Split while reading the input.
 	// Read it after the channel produced by Split closes.
 	E error
 
 	// RollSum state.
-	// Adapted from go4.mod/rollsum
+	// Adapted from go4.org/rollsum
 	// (which in turn is adapted from https://github.com/apenwarr/bup,
 	// which is adapted from librsync).
 	s1, s2         uint32
 	window         []byte
 	windowSizeBits int
-	splitBits      int
 	wofs           uint32
 }
 
 type Chunk struct {
 	Bytes []byte
-	Bits  int
+
+	// Bits tells how many extra trailing bits,
+	// beyond the SplitBits value needed to create a chunk,
+	// were set.
+	Bits int
 }
 
 // Split hashsplits its input using the rolling checksum from go4.org/rollsum.
@@ -53,9 +68,9 @@ func Split(ctx context.Context, r io.Reader) (<-chan Chunk, func() error) {
 	s := &Splitter{
 		// xxx temporary
 		windowSizeBits: 6,
-		splitBits:      13,
+		SplitBits:      13,
 	}
-	s.Reset()
+	s.reset()
 	ch := s.Split(ctx, r)
 	return ch, func() error { return s.E }
 }
@@ -98,10 +113,14 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
 			if err == io.EOF {
 				if len(chunk) > 0 {
 					tz, _ := s.checkSplit()
+					var extraBits int
+					if tz >= s.SplitBits {
+						extraBits = tz - s.SplitBits
+					}
 					select {
 					case <-ctx.Done():
 						s.E = ctx.Err()
-					case ch <- Chunk{Bytes: chunk, Bits: tz}:
+					case ch <- Chunk{Bytes: chunk, Bits: extraBits}:
 					}
 				}
 				return
@@ -112,13 +131,19 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
 			}
 			chunk = append(chunk, c)
 			s.roll(c)
+			if len(chunk) < s.MinSize {
+				continue
+			}
 			if tz, shouldSplit := s.checkSplit(); shouldSplit {
 				select {
 				case <-ctx.Done():
 					s.E = ctx.Err()
 					return
-				case ch <- Chunk{Bytes: chunk, Bits: tz}:
+				case ch <- Chunk{Bytes: chunk, Bits: tz - s.SplitBits}:
 					chunk = []byte{}
+					if s.Reset {
+						s.reset()
+					}
 				}
 			}
 		}
@@ -127,7 +152,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
 	return ch
 }
 
-func (s *Splitter) Reset() {
+func (s *Splitter) reset() {
 	ws := s.windowSize()
 	s.s1 = ws * s.charOffset()
 	s.s2 = s.s1 * (ws - 1)
@@ -150,7 +175,7 @@ func (s *Splitter) roll(add byte) {
 
 func (s *Splitter) checkSplit() (int, bool) {
 	tz := bits.TrailingZeros32(^s.s2)
-	return tz, tz >= s.splitBits
+	return tz, tz >= s.SplitBits
 }
 
 func (s *Splitter) windowSize() uint32 {
