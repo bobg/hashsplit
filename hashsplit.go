@@ -21,6 +21,22 @@ type Splitter struct {
 	// SplitBits is the number of trailing bits in the rolling checksum that must be set to produce a chunk.
 	SplitBits int
 
+	// LevelBits is used by Tree to determine when to create new levels of the tree.
+	// It is a number of extra trailing bits in the rolling checksum
+	// (beyond SplitBits, the number needed to produce a chunk).
+	// For example, if SplitBits is 13 and LevelBits is 4,
+	// then a new tree level is created after encountering a chunk
+	// with 17 trailing rollsum bits set;
+	// a second new tree level is created after encountering a chunk
+	// with 21 trailing rollsum bits set;
+	// and so on.
+	LevelBits int
+
+	// ChunkFunc is used by Tree to populate the leaves of the tree.
+	// It maps each chunk output from Split to a possibly transformed chunk.
+	// A typical use of this function is to replace a chunk with something like its sha256 hash.
+	ChunkFunc func([]byte) []byte
+
 	// E holds any error encountered during Split while reading the input.
 	// Read it after the channel produced by Split closes.
 	E error
@@ -35,13 +51,9 @@ type Splitter struct {
 	wofs           uint32
 }
 
-type Chunk struct {
-	Bytes []byte
-
-	// Bits tells how many extra trailing bits,
-	// beyond the SplitBits value needed to create a chunk,
-	// were set.
-	Bits int
+type chunkPair struct {
+	bytes []byte
+	bits  int
 }
 
 // Split hashsplits its input using the rolling checksum from go4.org/rollsum.
@@ -64,13 +76,8 @@ type Chunk struct {
 //   }
 //
 // See Splitter.Split for more detail.
-func Split(ctx context.Context, r io.Reader) (<-chan Chunk, func() error) {
-	s := &Splitter{
-		// xxx temporary
-		windowSizeBits: 6,
-		SplitBits:      13,
-	}
-	s.reset()
+func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
+	s := defaultSplitter()
 	ch := s.Split(ctx, r)
 	return ch, func() error { return s.E }
 }
@@ -96,8 +103,24 @@ func Split(ctx context.Context, r io.Reader) (<-chan Chunk, func() error) {
 //   if s.E != nil {
 //     ...handle error...
 //   }
-func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
-	ch := make(chan Chunk)
+func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
+	chunkPairs := s.split(ctx, r)
+	ch := make(chan []byte)
+	go func() {
+		defer close(ch)
+		for chunk := range chunkPairs {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- chunk.bytes:
+			}
+		}
+	}()
+	return ch
+}
+
+func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
+	ch := make(chan chunkPair)
 
 	go func() {
 		defer close(ch)
@@ -120,7 +143,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
 					select {
 					case <-ctx.Done():
 						s.E = ctx.Err()
-					case ch <- Chunk{Bytes: chunk, Bits: extraBits}:
+					case ch <- chunkPair{bytes: chunk, bits: extraBits}:
 					}
 				}
 				return
@@ -139,7 +162,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
 				case <-ctx.Done():
 					s.E = ctx.Err()
 					return
-				case ch <- Chunk{Bytes: chunk, Bits: tz - s.SplitBits}:
+				case ch <- chunkPair{bytes: chunk, bits: tz - s.SplitBits}:
 					chunk = []byte{}
 					if s.Reset {
 						s.reset()
@@ -184,4 +207,70 @@ func (s *Splitter) windowSize() uint32 {
 
 func (s *Splitter) charOffset() uint32 {
 	return s.windowSize()/2 - 1
+}
+
+func defaultSplitter() *Splitter {
+	s := &Splitter{
+		// xxx temporary
+		windowSizeBits: 6,
+		SplitBits:      13,
+		LevelBits:      4,
+		ChunkFunc:      func(b []byte) []byte { return b },
+	}
+	s.reset()
+	return s
+}
+
+type Node struct {
+	Level  int
+	Nodes  []*Node
+	Leaves [][]byte
+}
+
+func Tree(ctx context.Context, r io.Reader) (<-chan *Node, func() error) {
+	s := defaultSplitter()
+	ch := s.Tree(ctx, r)
+	return ch, func() error { return s.E }
+}
+
+func (s *Splitter) Tree(ctx context.Context, r io.Reader) <-chan *Node {
+	inp := s.split(ctx, r)
+	out := make(chan *Node)
+
+	go func() {
+		defer close(out)
+
+		var (
+			levels = []*Node{new(Node)}
+			counts = []int{0}
+		)
+
+		for chunk := range inp {
+			var (
+				level = chunk.bits >> s.LevelBits
+				b     = s.ChunkFunc(chunk.bytes)
+			)
+			levels[0].Leaves = append(levels[0].Leaves, b)
+			for i := 0; i < level; i++ {
+				if i == len(levels)-1 {
+					levels = append(levels, &Node{Level: i + 1})
+					counts = append(counts, 0)
+				}
+				levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
+				out <- levels[i]
+				counts[i]++
+				levels[i] = &Node{Level: i}
+			}
+		}
+		if len(levels[0].Leaves) > 0 {
+			for i := 0; i < len(levels)-1; i++ {
+				levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
+				out <- levels[i]
+				counts[i]++
+			}
+			out <- levels[len(levels)-1]
+		}
+	}()
+
+	return out
 }

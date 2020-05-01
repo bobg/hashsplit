@@ -3,6 +3,7 @@ package hashsplit
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -26,7 +27,7 @@ func TestSplit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(chunk.Bytes, want) {
+		if !bytes.Equal(chunk, want) {
 			t.Errorf("mismatch in chunk %d", i)
 		}
 	}
@@ -46,15 +47,19 @@ func TestTree(t *testing.T) {
 	}
 	defer f.Close()
 
-	ch, errfn := Split(context.Background(), f)
+	s := defaultSplitter()
+	s.LevelBits = 1
 
-	tb := &TreeBuilder{
-		ChunkFunc: func(c Chunk) ([]byte, int) {
-			level := c.Bits/2
-			return c.Bytes, level
-		},
+	h := sha256.New()
+
+	s.ChunkFunc = func(b []byte) []byte {
+		h.Reset()
+		h.Write(b)
+		return h.Sum(nil)
 	}
-	nodes := tb.Tree(ch)
+
+	nodes := s.Tree(context.Background(), f)
+
 	var root *Node
 	for node := range nodes {
 		if root == nil || node.Level > root.Level {
@@ -62,8 +67,8 @@ func TestTree(t *testing.T) {
 		}
 	}
 
-	if err := errfn(); err != nil {
-		t.Fatal(err)
+	if s.E != nil {
+		t.Fatal(s.E)
 	}
 
 	fmt.Println(spew.Sdump(root))
