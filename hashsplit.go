@@ -7,6 +7,11 @@ import (
 	"math/bits"
 )
 
+const (
+	windowSize uint32 = 64
+	charOffset uint32 = 31
+)
+
 // Splitter hashsplits its input according to a given RollSum algorithm.
 type Splitter struct {
 	// Reset says whether to reset the rollsum state to zero at the beginning of each new chunk.
@@ -45,10 +50,9 @@ type Splitter struct {
 	// Adapted from go4.org/rollsum
 	// (which in turn is adapted from https://github.com/apenwarr/bup,
 	// which is adapted from librsync).
-	s1, s2         uint32
-	window         []byte
-	windowSizeBits int
-	wofs           uint32
+	s1, s2 uint32
+	window [windowSize]byte
+	wofs   uint32
 }
 
 type chunkPair struct {
@@ -77,7 +81,7 @@ type chunkPair struct {
 //
 // See Splitter.Split for more detail.
 func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
-	s := defaultSplitter()
+	s := New()
 	ch := s.Split(ctx, r)
 	return ch, func() error { return s.E }
 }
@@ -176,24 +180,26 @@ func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 }
 
 func (s *Splitter) reset() {
-	ws := s.windowSize()
-	s.s1 = ws * s.charOffset()
-	s.s2 = s.s1 * (ws - 1)
-	s.window = make([]byte, ws)
+	s.s1 = windowSize * charOffset
+	s.s2 = s.s1 * (windowSize - 1)
+
+	var zeroes [windowSize]byte
+	copy(s.window[:], zeroes[:])
+
 	s.wofs = 0
 }
 
 func (s *Splitter) roll(add byte) {
-	ws := s.windowSize()
+	windowSize := windowSize
 	drop := uint32(s.window[s.wofs])
 
 	s.s1 += uint32(add)
 	s.s1 -= drop
 	s.s2 += s.s1
-	s.s2 -= ws * (drop + s.charOffset())
+	s.s2 -= windowSize * (drop + charOffset)
 
 	s.window[s.wofs] = add
-	s.wofs = (s.wofs + 1) & (ws - 1)
+	s.wofs = (s.wofs + 1) & (windowSize - 1)
 }
 
 func (s *Splitter) checkSplit() (int, bool) {
@@ -201,21 +207,11 @@ func (s *Splitter) checkSplit() (int, bool) {
 	return tz, tz >= s.SplitBits
 }
 
-func (s *Splitter) windowSize() uint32 {
-	return 1 << s.windowSizeBits
-}
-
-func (s *Splitter) charOffset() uint32 {
-	return s.windowSize()/2 - 1
-}
-
-func defaultSplitter() *Splitter {
+func New() *Splitter {
 	s := &Splitter{
-		// xxx temporary
-		windowSizeBits: 6,
-		SplitBits:      13,
-		LevelBits:      4,
-		ChunkFunc:      func(b []byte) []byte { return b },
+		SplitBits: 13,
+		LevelBits: 4,
+		ChunkFunc: func(b []byte) []byte { return b },
 	}
 	s.reset()
 	return s
@@ -228,7 +224,7 @@ type Node struct {
 }
 
 func Tree(ctx context.Context, r io.Reader) (<-chan *Node, func() error) {
-	s := defaultSplitter()
+	s := New()
 	ch := s.Tree(ctx, r)
 	return ch, func() error { return s.E }
 }

@@ -47,7 +47,7 @@ func TestTree(t *testing.T) {
 	}
 	defer f.Close()
 
-	s := defaultSplitter()
+	s := New()
 	s.LevelBits = 1
 
 	h := sha256.New()
