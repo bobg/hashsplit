@@ -12,34 +12,64 @@ const (
 	charOffset uint32 = 31
 )
 
-// Splitter hashsplits its input according to a given RollSum algorithm.
+// Splitter hashsplits a byte sequence into chunks.
+//
+// Hashsplitting is a way of dividing a byte stream into pieces
+// based on the stream's content rather than on any predetermined chunk size.
+// As the Splitter reads the stream it maintains a rolling checksum of the last several bytes.
+// A chunk boundary occurs when the rolling checksum has enough trailing bits set
+// (where "enough" is a configurable setting that determines the average chunk size).
+//
+// Hashsplitting has benefits when it comes to representing multiple,
+// slightly different versions of the same data.
+// Consider, for example, the problem of adding EXIF tags to a JPEG image file.
+// The tags appear near the beginning of the file, and the bulk of the image data follows.
+// If the file were divided into chunks at (say) 8-kilobyte boundaries,
+// then adding EXIF data near the beginning would alter every following chunk
+// (except in the lucky case where the size of the added data is an exact multiple of 8kb).
+// With hashsplitting, only the chunks in the vicinity of the change are affected.
+//
+// Hashsplitting is used to dramatically reduce storage and communication requirements
+// in projects like git, rsync, bup, and perkeep.
 type Splitter struct {
 	// Reset says whether to reset the rollsum state to zero at the beginning of each new chunk.
-	// The default is false (as in go4.org/rollsum),
+	// The default (what you get when you call New) is false,
+	// as in go4.org/rollsum,
 	// but that means that a chunk's boundary is determined in part by the chunks that precede it.
+	// You probably want to set this to true to make your chunks independent of each other,
+	// unless you need go4.org/rollsum-compatible behavior.
 	Reset bool
 
 	// MinSize is the minimum chunk size. Only the final chunk may be smaller than this.
-	// The default is zero, meaning chunks may be any size.
+	// The default is zero, meaning chunks may be any size. (But they are never empty.)
 	MinSize int
 
 	// SplitBits is the number of trailing bits in the rolling checksum that must be set to produce a chunk.
+	// The default (what you get when you call New) is 13,
+	// which means a chunk boundary occurs on average once every 8,192 bytes.
+	//
+	// (But thanks to math, that doesn't mean that 8,192 is the median chunk size.
+	// The median chunk size is actually the logarithm, base (SplitBits-1)/SplitBits, of 0.5.
+	// That makes the median chunk size 5,678 when SplitBits==13.)
 	SplitBits int
 
 	// LevelBits is used by Tree to determine when to create new levels of the tree.
 	// It is a number of extra trailing bits in the rolling checksum
 	// (beyond SplitBits, the number needed to produce a chunk).
-	// For example, if SplitBits is 13 and LevelBits is 4,
+	// For example, if SplitBits is 13 and LevelBits is 4 (the default when you call New),
 	// then a new tree level is created after encountering a chunk
 	// with 17 trailing rollsum bits set;
 	// a second new tree level is created after encountering a chunk
 	// with 21 trailing rollsum bits set;
 	// and so on.
+	//
+	// See Tree for more detail.
 	LevelBits int
 
 	// ChunkFunc is used by Tree to populate the leaves of the tree.
-	// It maps each chunk output from Split to a possibly transformed chunk.
+	// It maps each chunk from Split to a possibly transformed chunk.
 	// A typical use of this function is to replace a chunk with something like its sha256 hash.
+	// The default simply leaves the chunk unchanged.
 	ChunkFunc func([]byte) []byte
 
 	// E holds any error encountered during Split while reading the input.
@@ -60,11 +90,7 @@ type chunkPair struct {
 	bits  int
 }
 
-// Split hashsplits its input using the rolling checksum from go4.org/rollsum.
-// That produces chunks that are mostly between 5kb and 9kb in size.
-// For a different size distribution,
-// use a Splitter with your own RollSum
-// and call its Split method.
+// Split hashsplits its input using the default Splitter.
 //
 // Return values are a channel for the split input chunks,
 // and an error function to be called after the channel closes.
@@ -86,10 +112,10 @@ func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
 	return ch, func() error { return s.E }
 }
 
-// Split hashsplits its input using the rolling checksum in s.R.
+// Split hashsplits its input.
 // Bytes are read from r one at a time and added to the current chunk.
-// The current chunk is sent on the output channel when it satisfies RollSum.OnSplit.
-// The final chunk may not satisfy OnSplit.
+// The current chunk is sent on the output channel when s.SplitBits trailing bits of the rollsum state are set.
+// The final chunk is sent regardless of the rollsum state, naturally.
 //
 // After consuming the chunks from the output channel,
 // the caller should check s.E to discover whether an error occurred reading from r.
@@ -207,6 +233,9 @@ func (s *Splitter) checkSplit() (int, bool) {
 	return tz, tz >= s.SplitBits
 }
 
+// New produces a new Splitter with the default values of 13 for SplitBits,
+// 4 for LevelBits,
+// and the identity function for ChunkFunc.
 func New() *Splitter {
 	s := &Splitter{
 		SplitBits: 13,
@@ -218,55 +247,45 @@ func New() *Splitter {
 }
 
 type Node struct {
-	Level  int
 	Nodes  []*Node
 	Leaves [][]byte
 }
 
-func Tree(ctx context.Context, r io.Reader) (<-chan *Node, func() error) {
+func Tree(ctx context.Context, r io.Reader) (*Node, func() error) {
 	s := New()
-	ch := s.Tree(ctx, r)
-	return ch, func() error { return s.E }
+	root := s.Tree(ctx, r)
+	return root, func() error { return s.E }
 }
 
-func (s *Splitter) Tree(ctx context.Context, r io.Reader) <-chan *Node {
+func (s *Splitter) Tree(ctx context.Context, r io.Reader) *Node {
 	inp := s.split(ctx, r)
-	out := make(chan *Node)
+	levels := []*Node{new(Node)}
 
-	go func() {
-		defer close(out)
-
+	for chunk := range inp {
 		var (
-			levels = []*Node{new(Node)}
-			counts = []int{0}
+			level = chunk.bits >> s.LevelBits
+			b     = s.ChunkFunc(chunk.bytes)
 		)
-
-		for chunk := range inp {
-			var (
-				level = chunk.bits >> s.LevelBits
-				b     = s.ChunkFunc(chunk.bytes)
-			)
-			levels[0].Leaves = append(levels[0].Leaves, b)
-			for i := 0; i < level; i++ {
-				if i == len(levels)-1 {
-					levels = append(levels, &Node{Level: i + 1})
-					counts = append(counts, 0)
-				}
-				levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
-				out <- levels[i]
-				counts[i]++
-				levels[i] = &Node{Level: i}
+		levels[0].Leaves = append(levels[0].Leaves, b)
+		for i := 0; i < level; i++ {
+			if i == len(levels)-1 {
+				levels = append(levels, new(Node))
 			}
+			levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
+			levels[i] = new(Node)
 		}
-		if len(levels[0].Leaves) > 0 {
-			for i := 0; i < len(levels)-1; i++ {
-				levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
-				out <- levels[i]
-				counts[i]++
-			}
-			out <- levels[len(levels)-1]
+	}
+	if len(levels[0].Leaves) > 0 {
+		for i := 0; i < len(levels)-1; i++ {
+			levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
 		}
-	}()
+	}
 
-	return out
+	for i := len(levels) - 1; i > 0; i-- {
+		if len(levels[i].Nodes) > 1 {
+			return levels[i]
+		}
+	}
+
+	return levels[0]
 }

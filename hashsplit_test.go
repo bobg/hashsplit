@@ -58,14 +58,7 @@ func TestTree(t *testing.T) {
 		return h.Sum(nil)
 	}
 
-	nodes := s.Tree(context.Background(), f)
-
-	var root *Node
-	for node := range nodes {
-		if root == nil || node.Level > root.Level {
-			root = node
-		}
-	}
+	root := s.Tree(context.Background(), f)
 
 	if s.E != nil {
 		t.Fatal(s.E)
