@@ -3,13 +3,11 @@ package hashsplit
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"testing"
-
-	"github.com/davecgh/go-spew/spew"
 )
 
 func TestSplit(t *testing.T) {
@@ -41,28 +39,61 @@ func TestSplit(t *testing.T) {
 }
 
 func TestTree(t *testing.T) {
-	f, err := os.Open("testdata/commonsense.txt")
+	text, err := ioutil.ReadFile("testdata/commonsense.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
 
-	s := New()
-	s.LevelBits = 1
-
-	h := sha256.New()
-
-	s.ChunkFunc = func(b []byte) []byte {
-		h.Reset()
-		h.Write(b)
-		return h.Sum(nil)
+	s := &Splitter{
+		LevelBits: 1,
+	}
+	root, err := s.Tree(context.Background(), bytes.NewReader(text))
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	root := s.Tree(context.Background(), f)
-
-	if s.E != nil {
-		t.Fatal(s.E)
+	if len(root.Nodes) != 2 {
+		t.Fatalf("want len(root.Nodes)==2, got %d", len(root.Nodes))
+	}
+	if len(root.Nodes[0].Nodes) != 1 {
+		t.Fatalf("want len(root.Nodes[0].Nodes)==1, got %d", len(root.Nodes))
+	}
+	if len(root.Nodes[0].Nodes[0].Leaves) != 1 {
+		t.Fatalf("want len(root.Nodes[0].Nodes[0].Leaves)==1, got %d", len(root.Nodes[0].Nodes[0].Leaves))
+	}
+	if len(root.Nodes[1].Nodes) != 2 {
+		t.Fatalf("want len(root.Nodes[1].Nodes)==2, got %d", len(root.Nodes[1].Nodes))
+	}
+	if len(root.Nodes[1].Nodes[0].Leaves) != 16 {
+		t.Fatalf("want len(root.Nodes[1].Nodes[0].Leaves)==16, got %d", len(root.Nodes[1].Nodes[0].Leaves))
+	}
+	if len(root.Nodes[1].Nodes[1].Leaves) != 10 {
+		t.Fatalf("want len(root.Nodes[1].Nodes[1].Leaves)==10, got %d", len(root.Nodes[1].Nodes[1].Leaves))
 	}
 
-	fmt.Println(spew.Sdump(root))
+	pr, pw := io.Pipe()
+	go func() {
+		defer pw.Close()
+		var walk func(node *Node)
+		walk = func(node *Node) {
+			if len(node.Nodes) > 0 {
+				for _, child := range node.Nodes {
+					walk(child)
+				}
+			} else {
+				for _, leaf := range node.Leaves {
+					pw.Write(leaf)
+				}
+			}
+		}
+		walk(root)
+	}()
+
+	reassembled, err := ioutil.ReadAll(pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(text, reassembled) {
+		t.Error("reassembled text does not match original")
+	}
 }

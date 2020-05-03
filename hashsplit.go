@@ -8,9 +8,13 @@ import (
 )
 
 const (
-	windowSize uint32 = 64
-	charOffset uint32 = 31
+	windowSize       uint32 = 64
+	charOffset       uint32 = 31
+	defaultSplitBits        = 13
+	defaultLevelBits        = 4
 )
+
+func defaultChunkFunc(b []byte) []byte { return b }
 
 // Splitter hashsplits a byte sequence into chunks.
 //
@@ -29,11 +33,11 @@ const (
 // (except in the lucky case where the size of the added data is an exact multiple of 8kb).
 // With hashsplitting, only the chunks in the vicinity of the change are affected.
 //
-// Hashsplitting is used to dramatically reduce storage and communication requirements
+// Hashsplitting is used to dramatically reduce storage and bandwidth requirements
 // in projects like git, rsync, bup, and perkeep.
 type Splitter struct {
 	// Reset says whether to reset the rollsum state to zero at the beginning of each new chunk.
-	// The default (what you get when you call New) is false,
+	// The default is false,
 	// as in go4.org/rollsum,
 	// but that means that a chunk's boundary is determined in part by the chunks that precede it.
 	// You probably want to set this to true to make your chunks independent of each other,
@@ -45,7 +49,7 @@ type Splitter struct {
 	MinSize int
 
 	// SplitBits is the number of trailing bits in the rolling checksum that must be set to produce a chunk.
-	// The default (what you get when you call New) is 13,
+	// The default (what you get if you leave it set to zero) is 13,
 	// which means a chunk boundary occurs on average once every 8,192 bytes.
 	//
 	// (But thanks to math, that doesn't mean that 8,192 is the median chunk size.
@@ -56,7 +60,7 @@ type Splitter struct {
 	// LevelBits is used by Tree to determine when to create new levels of the tree.
 	// It is a number of extra trailing bits in the rolling checksum
 	// (beyond SplitBits, the number needed to produce a chunk).
-	// For example, if SplitBits is 13 and LevelBits is 4 (the default when you call New),
+	// For example, if SplitBits is 13 and LevelBits is 4,
 	// then a new tree level is created after encountering a chunk
 	// with 17 trailing rollsum bits set;
 	// a second new tree level is created after encountering a chunk
@@ -107,7 +111,7 @@ type chunkPair struct {
 //
 // See Splitter.Split for more detail.
 func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
-	s := New()
+	s := new(Splitter)
 	ch := s.Split(ctx, r)
 	return ch, func() error { return s.E }
 }
@@ -152,6 +156,13 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
 func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 	ch := make(chan chunkPair)
 
+	splitBits := s.SplitBits
+	if splitBits == 0 {
+		splitBits = defaultSplitBits
+	}
+
+	s.reset()
+
 	go func() {
 		defer close(ch)
 
@@ -165,10 +176,10 @@ func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 			c, err := rr.ReadByte()
 			if err == io.EOF {
 				if len(chunk) > 0 {
-					tz, _ := s.checkSplit()
+					tz, _ := s.checkSplit(splitBits)
 					var extraBits int
-					if tz >= s.SplitBits {
-						extraBits = tz - s.SplitBits
+					if tz >= splitBits {
+						extraBits = tz - splitBits
 					}
 					select {
 					case <-ctx.Done():
@@ -187,12 +198,12 @@ func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 			if len(chunk) < s.MinSize {
 				continue
 			}
-			if tz, shouldSplit := s.checkSplit(); shouldSplit {
+			if tz, shouldSplit := s.checkSplit(splitBits); shouldSplit {
 				select {
 				case <-ctx.Done():
 					s.E = ctx.Err()
 					return
-				case ch <- chunkPair{bytes: chunk, bits: tz - s.SplitBits}:
+				case ch <- chunkPair{bytes: chunk, bits: tz - splitBits}:
 					chunk = []byte{}
 					if s.Reset {
 						s.reset()
@@ -206,6 +217,8 @@ func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 }
 
 func (s *Splitter) reset() {
+	s.E = nil
+
 	s.s1 = windowSize * charOffset
 	s.s2 = s.s1 * (windowSize - 1)
 
@@ -228,43 +241,74 @@ func (s *Splitter) roll(add byte) {
 	s.wofs = (s.wofs + 1) & (windowSize - 1)
 }
 
-func (s *Splitter) checkSplit() (int, bool) {
+func (s *Splitter) checkSplit(splitBits int) (int, bool) {
 	tz := bits.TrailingZeros32(^s.s2)
-	return tz, tz >= s.SplitBits
+	return tz, tz >= splitBits
 }
 
-// New produces a new Splitter with the default values of 13 for SplitBits,
-// 4 for LevelBits,
-// and the identity function for ChunkFunc.
-func New() *Splitter {
-	s := &Splitter{
-		SplitBits: 13,
-		LevelBits: 4,
-		ChunkFunc: func(b []byte) []byte { return b },
-	}
-	s.reset()
-	return s
-}
-
+// Node is a node in the tree returned by Tree.
+// A interior node ("level 1" and higher) contains one or more subnodes as children.
+// A leaf node ("level 0") contains one or more byte slices,
+// which are hashsplit chunks of the input.
+// Exactly one of Nodes and Leaves is non-empty.
 type Node struct {
 	Nodes  []*Node
 	Leaves [][]byte
 }
 
-func Tree(ctx context.Context, r io.Reader) (*Node, func() error) {
-	s := New()
-	root := s.Tree(ctx, r)
-	return root, func() error { return s.E }
+// Tree hashsplits its input with the default Splitter
+// and assembles the chunks into a hashsplit tree.
+//
+// Return value is the root of the tree
+// (pruned to remove any singleton nodes).
+//
+// For more detail see Splitter.Tree.
+func Tree(ctx context.Context, r io.Reader) (*Node, error) {
+	s := new(Splitter)
+	return s.Tree(ctx, r)
 }
 
-func (s *Splitter) Tree(ctx context.Context, r io.Reader) *Node {
+// Tree hashsplits its input and assembles the chunks into a hashsplit tree.
+//
+// A hashsplit tree provides another level of space-and-bandwidth savings
+// over and above what Split gives you.
+// Consider, again, the example of adding EXIF tags to a JPEG file.
+// Although most chunks of the file will be the same before and after adding tags,
+// the _list_ needed to reassemble those chunks into the original file will be very different:
+// all the unaffected chunks must shift position to accommodate the new EXIF-containing chunks.
+//
+// A hashsplit tree organizes that list into a tree instead,
+// with the property that only the tree nodes in the vicinity of the change will be affected.
+// Most subtrees will remain the same.
+//
+// Chunks of hashsplit output are collected in a "level 0" node until
+// one whose rolling checksum has s.LevelBits extra bits set
+// (beyond s.SplitBits, the number needed to complete a chunk).
+// This adds the level-0 node as a child to a new level-1 node.
+// If 2*LevelBits extra bits are set,
+// that adds the level-1 node to a new level-2 node,
+// and so on.
+//
+// Return value is the root of the tree
+// (pruned to remove any singleton nodes).
+func (s *Splitter) Tree(ctx context.Context, r io.Reader) (*Node, error) {
 	inp := s.split(ctx, r)
 	levels := []*Node{new(Node)}
 
+	levelBits := s.LevelBits
+	if levelBits == 0 {
+		levelBits = defaultLevelBits
+	}
+
+	chunkFunc := s.ChunkFunc
+	if chunkFunc == nil {
+		chunkFunc = defaultChunkFunc
+	}
+
 	for chunk := range inp {
 		var (
-			level = chunk.bits >> s.LevelBits
-			b     = s.ChunkFunc(chunk.bytes)
+			level = chunk.bits >> levelBits
+			b     = chunkFunc(chunk.bytes)
 		)
 		levels[0].Leaves = append(levels[0].Leaves, b)
 		for i := 0; i < level; i++ {
@@ -283,9 +327,9 @@ func (s *Splitter) Tree(ctx context.Context, r io.Reader) *Node {
 
 	for i := len(levels) - 1; i > 0; i-- {
 		if len(levels[i].Nodes) > 1 {
-			return levels[i]
+			return levels[i], s.E
 		}
 	}
 
-	return levels[0]
+	return levels[0], s.E
 }
