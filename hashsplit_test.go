@@ -29,7 +29,8 @@ func TestSplit(t *testing.T) {
 			t.Errorf("mismatch in chunk %d", i)
 		}
 	}
-	const wantChunks = 27
+
+	const wantChunks = 18
 	if i != wantChunks {
 		t.Errorf("got %d chunks, want %d", i, wantChunks)
 	}
@@ -44,9 +45,9 @@ func TestTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &Splitter{
-		LevelBits: 1,
-	}
+	s := New()
+	s.LevelBits = 1
+
 	root, err := s.Tree(context.Background(), bytes.NewReader(text))
 	if err != nil {
 		t.Fatal(err)
@@ -55,20 +56,20 @@ func TestTree(t *testing.T) {
 	if len(root.Nodes) != 2 {
 		t.Fatalf("want len(root.Nodes)==2, got %d", len(root.Nodes))
 	}
-	if len(root.Nodes[0].Nodes) != 1 {
-		t.Fatalf("want len(root.Nodes[0].Nodes)==1, got %d", len(root.Nodes))
+	if len(root.Nodes[0].Nodes) != 2 {
+		t.Fatalf("want len(root.Nodes[0].Nodes)==2, got %d", len(root.Nodes))
 	}
-	if len(root.Nodes[0].Nodes[0].Leaves) != 1 {
-		t.Fatalf("want len(root.Nodes[0].Nodes[0].Leaves)==1, got %d", len(root.Nodes[0].Nodes[0].Leaves))
+	if len(root.Nodes[0].Nodes[0].Leaves) != 8 {
+		t.Fatalf("want len(root.Nodes[0].Nodes[0].Leaves)==8, got %d", len(root.Nodes[0].Nodes[0].Leaves))
 	}
-	if len(root.Nodes[1].Nodes) != 2 {
-		t.Fatalf("want len(root.Nodes[1].Nodes)==2, got %d", len(root.Nodes[1].Nodes))
+	if len(root.Nodes[0].Nodes[1].Leaves) != 7 {
+		t.Fatalf("want len(root.Nodes[0].Nodes[1].Leaves)==7, got %d", len(root.Nodes[0].Nodes[1].Leaves))
 	}
-	if len(root.Nodes[1].Nodes[0].Leaves) != 16 {
-		t.Fatalf("want len(root.Nodes[1].Nodes[0].Leaves)==16, got %d", len(root.Nodes[1].Nodes[0].Leaves))
+	if len(root.Nodes[1].Nodes) != 1 {
+		t.Fatalf("want len(root.Nodes[1].Nodes)==1, got %d", len(root.Nodes[1].Nodes))
 	}
-	if len(root.Nodes[1].Nodes[1].Leaves) != 10 {
-		t.Fatalf("want len(root.Nodes[1].Nodes[1].Leaves)==10, got %d", len(root.Nodes[1].Nodes[1].Leaves))
+	if len(root.Nodes[1].Nodes[0].Leaves) != 3 {
+		t.Fatalf("want len(root.Nodes[1].Nodes[0].Leaves)==3, got %d", len(root.Nodes[1].Nodes[0].Leaves))
 	}
 
 	pr, pw := io.Pipe()

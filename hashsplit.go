@@ -5,13 +5,13 @@ import (
 	"context"
 	"io"
 	"math/bits"
+
+	"go4.org/rollsum"
 )
 
 const (
-	windowSize       uint32 = 64
-	charOffset       uint32 = 31
-	defaultSplitBits        = 13
-	defaultLevelBits        = 4
+	defaultSplitBits = 13
+	defaultLevelBits = 4
 )
 
 func defaultChunkFunc(b []byte) []byte { return b }
@@ -80,13 +80,15 @@ type Splitter struct {
 	// Read it after the channel produced by Split closes.
 	E error
 
-	// RollSum state.
-	// Adapted from go4.org/rollsum
-	// (which in turn is adapted from https://github.com/apenwarr/bup,
-	// which is adapted from librsync).
-	s1, s2 uint32
-	window [windowSize]byte
-	wofs   uint32
+	rs *rollsum.RollSum
+}
+
+func New() *Splitter {
+	return &Splitter{
+		SplitBits: defaultSplitBits,
+		LevelBits: defaultLevelBits,
+		ChunkFunc: defaultChunkFunc,
+	}
 }
 
 type chunkPair struct {
@@ -111,7 +113,7 @@ type chunkPair struct {
 //
 // See Splitter.Split for more detail.
 func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
-	s := new(Splitter)
+	s := New()
 	ch := s.Split(ctx, r)
 	return ch, func() error { return s.E }
 }
@@ -194,7 +196,7 @@ func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 				return
 			}
 			chunk = append(chunk, c)
-			s.roll(c)
+			s.rs.Roll(c)
 			if len(chunk) < s.MinSize {
 				continue
 			}
@@ -218,31 +220,12 @@ func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 
 func (s *Splitter) reset() {
 	s.E = nil
-
-	s.s1 = windowSize * charOffset
-	s.s2 = s.s1 * (windowSize - 1)
-
-	var zeroes [windowSize]byte
-	copy(s.window[:], zeroes[:])
-
-	s.wofs = 0
-}
-
-func (s *Splitter) roll(add byte) {
-	windowSize := windowSize
-	drop := uint32(s.window[s.wofs])
-
-	s.s1 += uint32(add)
-	s.s1 -= drop
-	s.s2 += s.s1
-	s.s2 -= windowSize * (drop + charOffset)
-
-	s.window[s.wofs] = add
-	s.wofs = (s.wofs + 1) & (windowSize - 1)
+	s.rs = rollsum.New()
 }
 
 func (s *Splitter) checkSplit(splitBits int) (int, bool) {
-	tz := bits.TrailingZeros32(^s.s2)
+	h := s.rs.Digest()
+	tz := bits.TrailingZeros32(h)
 	return tz, tz >= splitBits
 }
 
@@ -264,7 +247,7 @@ type Node struct {
 //
 // For more detail see Splitter.Tree.
 func Tree(ctx context.Context, r io.Reader) (*Node, error) {
-	s := new(Splitter)
+	s := New()
 	return s.Tree(ctx, r)
 }
 
