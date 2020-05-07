@@ -308,11 +308,10 @@ func (s *Splitter) Tree(ctx context.Context, r io.Reader) (*Node, error) {
 		}
 	}
 
-	for i := len(levels) - 1; i > 0; i-- {
-		if len(levels[i].Nodes) > 1 {
-			return levels[i], s.E
-		}
+	root := levels[len(levels)-1]
+	for len(root.Nodes) == 1 {
+		root = root.Nodes[0]
 	}
 
-	return levels[0], s.E
+	return root, s.E
 }
