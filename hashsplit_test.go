@@ -45,19 +45,27 @@ func TestTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New()
-	s.LevelBits = 1
+	s := new(Splitter)
+	ch := s.SplitPairs(context.Background(), bytes.NewReader(text))
 
-	root, err := s.Tree(context.Background(), bytes.NewReader(text))
-	if err != nil {
-		t.Fatal(err)
+	ch2 := make(chan Pair)
+	go func() {
+		defer close(ch2)
+		for p := range ch {
+			ch2 <- Pair{p.Chunk, p.Level / 2}
+		}
+	}()
+
+	root := Tree(ch2)
+	if s.E != nil {
+		t.Fatal(s.E)
 	}
 
 	if len(root.Nodes) != 2 {
 		t.Fatalf("want len(root.Nodes)==2, got %d", len(root.Nodes))
 	}
 	if len(root.Nodes[0].Nodes) != 2 {
-		t.Fatalf("want len(root.Nodes[0].Nodes)==2, got %d", len(root.Nodes))
+		t.Fatalf("want len(root.Nodes[0].Nodes)==2, got %d", len(root.Nodes[0].Nodes))
 	}
 	if len(root.Nodes[0].Nodes[0].Leaves) != 8 {
 		t.Fatalf("want len(root.Nodes[0].Nodes[0].Leaves)==8, got %d", len(root.Nodes[0].Nodes[0].Leaves))

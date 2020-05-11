@@ -9,12 +9,7 @@ import (
 	"go4.org/rollsum"
 )
 
-const (
-	defaultSplitBits = 13
-	defaultLevelBits = 4
-)
-
-func defaultChunkFunc(b []byte) []byte { return b }
+const defaultSplitBits = 13
 
 // Splitter hashsplits a byte sequence into chunks.
 //
@@ -57,25 +52,6 @@ type Splitter struct {
 	// That makes the median chunk size 5,678 when SplitBits==13.)
 	SplitBits int
 
-	// LevelBits is used by Tree to determine when to create new levels of the tree.
-	// It is a number of extra trailing bits in the rolling checksum
-	// (beyond SplitBits, the number needed to produce a chunk).
-	// For example, if SplitBits is 13 and LevelBits is 4,
-	// then a new tree level is created after encountering a chunk
-	// with 17 trailing rollsum bits set;
-	// a second new tree level is created after encountering a chunk
-	// with 21 trailing rollsum bits set;
-	// and so on.
-	//
-	// See Tree for more detail.
-	LevelBits int
-
-	// ChunkFunc is used by Tree to populate the leaves of the tree.
-	// It maps each chunk from Split to a possibly transformed chunk.
-	// A typical use of this function is to replace a chunk with something like its sha256 hash.
-	// The default simply leaves the chunk unchanged.
-	ChunkFunc func([]byte) []byte
-
 	// E holds any error encountered during Split while reading the input.
 	// Read it after the channel produced by Split closes.
 	E error
@@ -83,17 +59,16 @@ type Splitter struct {
 	rs *rollsum.RollSum
 }
 
-func New() *Splitter {
-	return &Splitter{
-		SplitBits: defaultSplitBits,
-		LevelBits: defaultLevelBits,
-		ChunkFunc: defaultChunkFunc,
-	}
-}
-
-type chunkPair struct {
-	bytes []byte
-	bits  int
+// Pair is the output produced by SplitPairs.
+// It contains a hashsplit chunk of the input, plus its "level."
+// The level of a chunk is the number of additional trailing rollsum bits,
+// beyond the number needed to make a chunk,
+// that were set when the chunk was made.
+// This number is used in constructing a hashsplit tree;
+// see Tree.
+type Pair struct {
+	Chunk []byte
+	Level int
 }
 
 // Split hashsplits its input using the default Splitter.
@@ -113,8 +88,17 @@ type chunkPair struct {
 //
 // See Splitter.Split for more detail.
 func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
-	s := New()
+	s := &Splitter{SplitBits: defaultSplitBits}
 	ch := s.Split(ctx, r)
+	return ch, func() error { return s.E }
+}
+
+// SplitPairs hashsplits its input into chunk pairs using the default Splitter.
+// Each pair includes the chunk's bytes plus its "level."
+// See Splitter.Split and Pair for more detail.
+func SplitPairs(ctx context.Context, r io.Reader) (<-chan Pair, func() error) {
+	s := &Splitter{SplitBits: defaultSplitBits}
+	ch := s.SplitPairs(ctx, r)
 	return ch, func() error { return s.E }
 }
 
@@ -128,35 +112,27 @@ func Split(ctx context.Context, r io.Reader) (<-chan []byte, func() error) {
 //
 // A caller that will not consume all the chunks from the output channel
 // should cancel the context object to release resources.
-//
-// Example usage:
-//
-//   s := &Splitter{R: new(myRollSum)}
-//   ch := s.Split(ctx, r)
-//   for chunk := range ch {
-//     ...process chunk...
-//   }
-//   if s.E != nil {
-//     ...handle error...
-//   }
 func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan []byte {
-	chunkPairs := s.split(ctx, r)
+	chunkPairs := s.SplitPairs(ctx, r)
 	ch := make(chan []byte)
 	go func() {
 		defer close(ch)
-		for chunk := range chunkPairs {
+		for pair := range chunkPairs {
 			select {
 			case <-ctx.Done():
 				return
-			case ch <- chunk.bytes:
+			case ch <- pair.Chunk:
 			}
 		}
 	}()
 	return ch
 }
 
-func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
-	ch := make(chan chunkPair)
+// SplitPairs hashsplits its input into chunk pairs.
+// Each pair includes the chunk's bytes plus its "level."
+// See Splitter.Split and Pair for more detail.
+func (s *Splitter) SplitPairs(ctx context.Context, r io.Reader) <-chan Pair {
+	ch := make(chan Pair)
 
 	splitBits := s.SplitBits
 	if splitBits == 0 {
@@ -186,7 +162,7 @@ func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 					select {
 					case <-ctx.Done():
 						s.E = ctx.Err()
-					case ch <- chunkPair{bytes: chunk, bits: extraBits}:
+					case ch <- Pair{Chunk: chunk, Level: extraBits}:
 					}
 				}
 				return
@@ -205,7 +181,7 @@ func (s *Splitter) split(ctx context.Context, r io.Reader) <-chan chunkPair {
 				case <-ctx.Done():
 					s.E = ctx.Err()
 					return
-				case ch <- chunkPair{bytes: chunk, bits: tz - splitBits}:
+				case ch <- Pair{Chunk: chunk, Level: tz - splitBits}:
 					chunk = []byte{}
 					if s.Reset {
 						s.reset()
@@ -237,21 +213,12 @@ func (s *Splitter) checkSplit(splitBits int) (int, bool) {
 type Node struct {
 	Nodes  []*Node
 	Leaves [][]byte
+
+	Size   int64
+	Offset int64
 }
 
-// Tree hashsplits its input with the default Splitter
-// and assembles the chunks into a hashsplit tree.
-//
-// Return value is the root of the tree
-// (pruned to remove any singleton nodes).
-//
-// For more detail see Splitter.Tree.
-func Tree(ctx context.Context, r io.Reader) (*Node, error) {
-	s := New()
-	return s.Tree(ctx, r)
-}
-
-// Tree hashsplits its input and assembles the chunks into a hashsplit tree.
+// Tree assembles the output of Split into a hashsplit tree.
 //
 // A hashsplit tree provides another level of space-and-bandwidth savings
 // over and above what Split gives you.
@@ -265,41 +232,33 @@ func Tree(ctx context.Context, r io.Reader) (*Node, error) {
 // Most subtrees will remain the same.
 //
 // Chunks of hashsplit output are collected in a "level 0" node until
-// one whose rolling checksum has s.LevelBits extra bits set
-// (beyond s.SplitBits, the number needed to complete a chunk).
+// one whose rolling checksum has levelBits extra bits set
+// (beyond the number needed to complete a chunk).
 // This adds the level-0 node as a child to a new level-1 node.
-// If 2*LevelBits extra bits are set,
+// If 2*levelBits extra bits are set,
 // that adds the level-1 node to a new level-2 node,
 // and so on.
 //
-// Return value is the root of the tree
-// (pruned to remove any singleton nodes).
-func (s *Splitter) Tree(ctx context.Context, r io.Reader) (*Node, error) {
-	inp := s.split(ctx, r)
+// Return value is the root of the tree,
+// pruned to remove any singleton nodes.
+func Tree(inp <-chan Pair) *Node {
 	levels := []*Node{new(Node)}
 
-	levelBits := s.LevelBits
-	if levelBits == 0 {
-		levelBits = defaultLevelBits
-	}
-
-	chunkFunc := s.ChunkFunc
-	if chunkFunc == nil {
-		chunkFunc = defaultChunkFunc
-	}
-
-	for chunk := range inp {
-		var (
-			level = chunk.bits >> levelBits
-			b     = chunkFunc(chunk.bytes)
-		)
-		levels[0].Leaves = append(levels[0].Leaves, b)
-		for i := 0; i < level; i++ {
+	for pair := range inp {
+		levels[0].Leaves = append(levels[0].Leaves, pair.Chunk)
+		for _, n := range levels {
+			n.Size += int64(len(pair.Chunk))
+		}
+		for i := 0; i < pair.Level; i++ {
 			if i == len(levels)-1 {
-				levels = append(levels, new(Node))
+				levels = append(levels, &Node{
+					Size: levels[i].Size,
+				})
 			}
 			levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
-			levels[i] = new(Node)
+			levels[i] = &Node{
+				Offset: levels[i+1].Offset + levels[i+1].Size,
+			}
 		}
 	}
 	if len(levels[0].Leaves) > 0 {
@@ -313,5 +272,5 @@ func (s *Splitter) Tree(ctx context.Context, r io.Reader) (*Node, error) {
 		root = root.Nodes[0]
 	}
 
-	return root, s.E
+	return root
 }
