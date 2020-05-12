@@ -25,7 +25,7 @@ func TestSplit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(chunk, want) {
+		if !bytes.Equal(chunk.Bytes, want) {
 			t.Errorf("mismatch in chunk %d", i)
 		}
 	}
@@ -46,17 +46,14 @@ func TestTree(t *testing.T) {
 	}
 
 	s := new(Splitter)
-	ch := s.SplitPairs(context.Background(), bytes.NewReader(text))
+	ch := s.Split(context.Background(), bytes.NewReader(text))
+	ch = Filter(ch, func(chunk Chunk) Chunk {
+		chunk2 := chunk
+		chunk2.Level /= 2
+		return chunk2
+	})
 
-	ch2 := make(chan Pair)
-	go func() {
-		defer close(ch2)
-		for p := range ch {
-			ch2 <- Pair{p.Chunk, p.Level / 2}
-		}
-	}()
-
-	root := Tree(ch2)
+	root := Tree(ch)
 	if s.E != nil {
 		t.Fatal(s.E)
 	}
