@@ -47,15 +47,18 @@ func TestTree(t *testing.T) {
 
 	s := new(Splitter)
 	ch := s.Split(context.Background(), bytes.NewReader(text))
-	ch = Filter(ch, func(chunk Chunk) Chunk {
+	ch, errfn := Filter(ch, func(chunk Chunk) (Chunk, error) {
 		chunk2 := chunk
 		chunk2.Level /= 2
-		return chunk2
+		return chunk2, nil
 	})
 
 	root := Tree(ch)
 	if s.E != nil {
 		t.Fatal(s.E)
+	}
+	if err = errfn(); err != nil {
+		t.Fatal(err)
 	}
 
 	if len(root.Nodes) != 2 {

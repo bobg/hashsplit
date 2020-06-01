@@ -202,26 +202,41 @@ func (s *Splitter) checkSplit(splitBits int) (int, bool) {
 // by mapping more chunks to fewer levels,
 // like so:
 //
-// ch = Filter(ch, func(chunk Chunk) Chunk {
+// ch, errfn := Filter(ch, func(chunk Chunk) (Chunk, error) {
 //    return Chunk{
 //        Bytes: chunk.Bytes,
 //        Len:   chunk.Len,
 //        Level: chunk.Level / 2,
-//    }
+//    }, nil
 // })
+// // ...consume ch...
+// if err := errfn(); err != nil {
+//   // ...handle err
+// }
 //
 // Another typical use is to save the bytes of each chunk aside
 // and replace them with their hashes
 // for a more compact tree.
-func Filter(inp <-chan Chunk, chunkFunc func(Chunk) Chunk) <-chan Chunk {
+//
+// If chunkFunc returns an error, the output channel is closed early.
+// After the chunks from the resulting output channel are consumed,
+// callers should invoke the func()error to access the error returned by chunkFunc
+// (if any).
+func Filter(inp <-chan Chunk, chunkFunc func(Chunk) (Chunk, error)) (<-chan Chunk, func() error) {
 	out := make(chan Chunk)
+	var err error
 	go func() {
 		defer close(out)
 		for chunk := range inp {
-			out <- chunkFunc(chunk)
+			var newChunk Chunk
+			newChunk, err = chunkFunc(chunk)
+			if err != nil {
+				return
+			}
+			out <- newChunk
 		}
 	}()
-	return out
+	return out, func() error { return err }
 }
 
 // Node is a node in the tree returned by Tree.
