@@ -50,7 +50,7 @@ type Splitter struct {
 	// (But thanks to math, that doesn't mean that 8,192 is the median chunk size.
 	// The median chunk size is actually the logarithm, base (SplitBits-1)/SplitBits, of 0.5.
 	// That makes the median chunk size 5,678 when SplitBits==13.)
-	SplitBits int
+	SplitBits uint
 
 	// E holds any error encountered during Split while reading the input.
 	// Read it after the channel produced by Split closes.
@@ -83,7 +83,7 @@ type Splitter struct {
 // see Tree.
 type Chunk struct {
 	Bytes      []byte
-	Len, Level int
+	Len, Level uint
 }
 
 // Split hashsplits its input using the default Splitter.
@@ -142,14 +142,14 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
 			if err == io.EOF {
 				if len(b) > 0 {
 					tz, _ := s.checkSplit(splitBits)
-					var extraBits int
+					var extraBits uint
 					if tz >= splitBits {
 						extraBits = tz - splitBits
 					}
 					select {
 					case <-ctx.Done():
 						s.E = ctx.Err()
-					case ch <- Chunk{Bytes: b, Len: len(b), Level: extraBits}:
+					case ch <- Chunk{Bytes: b, Len: uint(len(b)), Level: extraBits}:
 					}
 				}
 				return
@@ -168,7 +168,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
 				case <-ctx.Done():
 					s.E = ctx.Err()
 					return
-				case ch <- Chunk{Bytes: b, Len: len(b), Level: tz - splitBits}:
+				case ch <- Chunk{Bytes: b, Len: uint(len(b)), Level: tz - splitBits}:
 					b = []byte{}
 					if s.Reset {
 						s.reset()
@@ -186,9 +186,9 @@ func (s *Splitter) reset() {
 	s.rs = rollsum.New()
 }
 
-func (s *Splitter) checkSplit(splitBits int) (int, bool) {
+func (s *Splitter) checkSplit(splitBits uint) (uint, bool) {
 	h := s.rs.Digest()
-	tz := bits.TrailingZeros32(h)
+	tz := uint(bits.TrailingZeros32(h))
 	return tz, tz >= splitBits
 }
 
@@ -247,7 +247,7 @@ func Filter(inp <-chan Chunk, chunkFunc func(Chunk) (Chunk, error)) (<-chan Chun
 type Node struct {
 	Nodes        []*Node
 	Leaves       [][]byte
-	Size, Offset int64
+	Size, Offset uint64
 }
 
 // Tree assembles the output of Split into a hashsplit tree.
@@ -279,10 +279,10 @@ func Tree(inp <-chan Chunk) *Node {
 	for chunk := range inp {
 		levels[0].Leaves = append(levels[0].Leaves, chunk.Bytes)
 		for _, n := range levels {
-			n.Size += int64(chunk.Len)
+			n.Size += uint64(chunk.Len)
 		}
-		for i := 0; i < chunk.Level; i++ {
-			if i == len(levels)-1 {
+		for i := uint(0); i < chunk.Level; i++ {
+			if i == uint(len(levels))-1 {
 				levels = append(levels, &Node{
 					Size: levels[i].Size,
 				})
