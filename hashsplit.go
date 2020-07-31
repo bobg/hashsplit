@@ -1,3 +1,4 @@
+// Package hashsplit implements content-based splitting of byte streams.
 package hashsplit
 
 import (
@@ -202,17 +203,17 @@ func (s *Splitter) checkSplit(splitBits uint) (uint, bool) {
 // by mapping more chunks to fewer levels,
 // like so:
 //
-// ch, errfn := Filter(ch, func(chunk Chunk) (Chunk, error) {
-//    return Chunk{
-//        Bytes: chunk.Bytes,
-//        Len:   chunk.Len,
-//        Level: chunk.Level / 2,
-//    }, nil
-// })
-// // ...consume ch...
-// if err := errfn(); err != nil {
-//   // ...handle err
-// }
+//     ch, errfn := Filter(ch, func(chunk Chunk) (Chunk, error) {
+//       return Chunk{
+//           Bytes: chunk.Bytes,
+//           Len:   chunk.Len,
+//           Level: chunk.Level / 2,
+//       }, nil
+//     })
+//     //     ...consume ch...
+//     if err := errfn(); err != nil {
+//       // ...handle err...
+//     }
 //
 // Another typical use is to save the bytes of each chunk aside
 // and replace them with their hashes
