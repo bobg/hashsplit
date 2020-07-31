@@ -53,10 +53,6 @@ type Splitter struct {
 	// That makes the median chunk size 5,678 when SplitBits==13.)
 	SplitBits uint
 
-	// E holds any error encountered during Split while reading the input.
-	// Read it after the channel produced by Split closes.
-	E error
-
 	rs *rollsum.RollSum
 }
 
@@ -68,7 +64,6 @@ type Splitter struct {
 // Why include the length in the chunk,
 // when the caller could simply compute len(chunk.Bytes)?
 // Because the caller might want to replace chunk.Bytes
-// (e.g. via Filter)
 // with a compact representation of them,
 // such as a hash,
 // while leaving Len alone.
@@ -87,41 +82,23 @@ type Chunk struct {
 	Len, Level uint
 }
 
-// Split hashsplits its input using the default Splitter.
-//
-// Return values are a channel for the split input chunks,
-// and an error function to be called after the channel closes.
-//
-// Example usage:
-//
-//   ch, errfn := Split(ctx, r)
-//   for chunk := range ch {
-//     ...process chunk...
-//   }
-//   if err := errfn(); err != nil {
-//     ...handle error...
-//   }
+// Split hashsplits its input using the default Splitter,
+// calling a callback for each chunk produced.
 //
 // See Splitter.Split for more detail.
-func Split(ctx context.Context, r io.Reader) (<-chan Chunk, func() error) {
+func Split(ctx context.Context, r io.Reader, f func(Chunk) error) error {
 	s := &Splitter{SplitBits: defaultSplitBits}
-	ch := s.Split(ctx, r)
-	return ch, func() error { return s.E }
+	return s.Split(ctx, r, f)
 }
 
 // Split hashsplits its input.
+//
 // Bytes are read from r one at a time and added to the current chunk.
-// The current chunk is sent on the output channel when s.SplitBits trailing bits of the rollsum state are set.
+// The callback is invoked on the current chunk when s.SplitBits trailing bits of the rollsum state are set.
 // The final chunk is sent regardless of the rollsum state, naturally.
 //
-// After consuming the chunks from the output channel,
-// the caller should check s.E to discover whether an error occurred reading from r.
-//
-// A caller that will not consume all the chunks from the output channel
-// should cancel the context object to release resources.
-func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
-	ch := make(chan Chunk)
-
+// If the callback return an error, Split exits with that error.
+func (s *Splitter) Split(ctx context.Context, r io.Reader, f func(Chunk) error) error {
 	splitBits := s.SplitBits
 	if splitBits == 0 {
 		splitBits = defaultSplitBits
@@ -129,61 +106,46 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader) <-chan Chunk {
 
 	s.reset()
 
-	go func() {
-		defer close(ch)
-
-		var b []byte
-		rr := bufio.NewReader(r)
-		for {
-			if err := ctx.Err(); err != nil {
-				s.E = err
-				return
-			}
-			c, err := rr.ReadByte()
-			if err == io.EOF {
-				if len(b) > 0 {
-					tz, _ := s.checkSplit(splitBits)
-					var extraBits uint
-					if tz >= splitBits {
-						extraBits = tz - splitBits
-					}
-					select {
-					case <-ctx.Done():
-						s.E = ctx.Err()
-					case ch <- Chunk{Bytes: b, Len: uint(len(b)), Level: extraBits}:
-					}
+	var b []byte
+	rr := bufio.NewReader(r)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c, err := rr.ReadByte()
+		if err == io.EOF {
+			if len(b) > 0 {
+				tz, _ := s.checkSplit(splitBits)
+				var extraBits uint
+				if tz >= splitBits {
+					extraBits = tz - splitBits
 				}
-				return
+				return f(Chunk{Bytes: b, Len: uint(len(b)), Level: extraBits})
 			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		b = append(b, c)
+		s.rs.Roll(c)
+		if len(b) < s.MinSize {
+			continue
+		}
+		if tz, shouldSplit := s.checkSplit(splitBits); shouldSplit {
+			err = f(Chunk{Bytes: b, Len: uint(len(b)), Level: tz - splitBits})
 			if err != nil {
-				s.E = err
-				return
+				return err
 			}
-			b = append(b, c)
-			s.rs.Roll(c)
-			if len(b) < s.MinSize {
-				continue
-			}
-			if tz, shouldSplit := s.checkSplit(splitBits); shouldSplit {
-				select {
-				case <-ctx.Done():
-					s.E = ctx.Err()
-					return
-				case ch <- Chunk{Bytes: b, Len: uint(len(b)), Level: tz - splitBits}:
-					b = []byte{}
-					if s.Reset {
-						s.reset()
-					}
-				}
+			b = []byte{}
+			if s.Reset {
+				s.reset()
 			}
 		}
-	}()
-
-	return ch
+	}
 }
 
 func (s *Splitter) reset() {
-	s.E = nil
 	s.rs = rollsum.New()
 }
 
@@ -191,53 +153,6 @@ func (s *Splitter) checkSplit(splitBits uint) (uint, bool) {
 	h := s.rs.Digest()
 	tz := uint(bits.TrailingZeros32(h))
 	return tz, tz >= splitBits
-}
-
-// Filter consumes the chunks in a channel,
-// transforms them according to a callback function,
-// and produces those on a new channel.
-//
-// A typical use of Filter is to increase the fan-out
-// (the number of children per node)
-// in the output of Tree,
-// by mapping more chunks to fewer levels,
-// like so:
-//
-//     ch, errfn := Filter(ch, func(chunk Chunk) (Chunk, error) {
-//       return Chunk{
-//           Bytes: chunk.Bytes,
-//           Len:   chunk.Len,
-//           Level: chunk.Level / 2,
-//       }, nil
-//     })
-//     //     ...consume ch...
-//     if err := errfn(); err != nil {
-//       // ...handle err...
-//     }
-//
-// Another typical use is to save the bytes of each chunk aside
-// and replace them with their hashes
-// for a more compact tree.
-//
-// If chunkFunc returns an error, the output channel is closed early.
-// After the chunks from the resulting output channel are consumed,
-// callers should invoke the func()error to access the error returned by chunkFunc
-// (if any).
-func Filter(inp <-chan Chunk, chunkFunc func(Chunk) (Chunk, error)) (<-chan Chunk, func() error) {
-	out := make(chan Chunk)
-	var err error
-	go func() {
-		defer close(out)
-		for chunk := range inp {
-			var newChunk Chunk
-			newChunk, err = chunkFunc(chunk)
-			if err != nil {
-				return
-			}
-			out <- newChunk
-		}
-	}()
-	return out, func() error { return err }
 }
 
 // Node is a node in the tree returned by Tree.

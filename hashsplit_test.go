@@ -17,9 +17,8 @@ func TestSplit(t *testing.T) {
 	}
 	defer f.Close()
 
-	ch, errfn := Split(context.Background(), f)
 	var i int
-	for chunk := range ch {
+	err = Split(context.Background(), f, func(chunk Chunk) error {
 		i++
 		want, err := ioutil.ReadFile(fmt.Sprintf("testdata/chunk%02d", i))
 		if err != nil {
@@ -28,14 +27,15 @@ func TestSplit(t *testing.T) {
 		if !bytes.Equal(chunk.Bytes, want) {
 			t.Errorf("mismatch in chunk %d", i)
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	const wantChunks = 18
 	if i != wantChunks {
 		t.Errorf("got %d chunks, want %d", i, wantChunks)
-	}
-	if err := errfn(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -45,21 +45,28 @@ func TestTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := new(Splitter)
-	ch := s.Split(context.Background(), bytes.NewReader(text))
-	ch, errfn := Filter(ch, func(chunk Chunk) (Chunk, error) {
-		chunk2 := chunk
-		chunk2.Level /= 2
-		return chunk2, nil
-	})
-
-	root := Tree(ch)
-	if s.E != nil {
-		t.Fatal(s.E)
-	}
-	if err = errfn(); err != nil {
+	var (
+		s    = new(Splitter)
+		ch   = make(chan Chunk)
+		done = make(chan struct{})
+		root *Node
+	)
+	go func() {
+		root = Tree(ch)
+		close(done)
+	}()
+	err = func() error {
+		defer close(ch)
+		return s.Split(context.Background(), bytes.NewReader(text), func(chunk Chunk) error {
+			chunk.Level /= 2
+			ch <- chunk
+			return nil
+		})
+	}()
+	if err != nil {
 		t.Fatal(err)
 	}
+	<-done
 
 	if len(root.Nodes) != 2 {
 		t.Fatalf("want len(root.Nodes)==2, got %d", len(root.Nodes))
