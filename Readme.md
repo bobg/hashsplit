@@ -1,5 +1,8 @@
 # Hashsplit - content-based splitting of byte streams
 
+[![GoDoc](https://godoc.org/github.com/bobg/hashsplit?status.svg)](https://godoc.org/github.com/bobg/hashsplit)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bobg/hashsplit)](https://goreportcard.com/report/github.com/bobg/hashsplit)
+
 Hashsplitting is a way of dividing a byte stream into pieces
 based on the stream's content rather than on any predetermined chunk size.
 As the Splitter reads the stream it maintains a rolling checksum of the last several bytes.
