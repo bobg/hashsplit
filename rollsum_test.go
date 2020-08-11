@@ -1,7 +1,6 @@
 package hashsplit
 
 import (
-	"bufio"
 	"math/rand"
 	"os"
 	"strconv"
@@ -17,21 +16,18 @@ func BenchmarkRollsum(b *testing.B) {
 		seed        = getSeed()
 		src         = rand.NewSource(seed)
 		rnd         = rand.New(src)
-		r           = bufio.NewReader(rnd)
 		rs          = rollsum.New()
 		countZeroes = os.Getenv("BENCHMARK_ROLLSUM_COUNT_ZEROES") == "1"
 		zeroes      [32]int
 	)
 	b.Logf("using seed %d", seed)
 
-	b.ResetTimer()
+	buf := make([]byte, b.N)
+	rnd.Read(buf[:])
 
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		c, err := r.ReadByte()
-		if err != nil {
-			b.Fatal(err)
-		}
-		rs.Roll(c)
+		rs.Roll(buf[i])
 		digest := rs.Digest()
 
 		// Would like to call b.StopTimer() here but ran into this bug:
