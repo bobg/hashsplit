@@ -25,12 +25,12 @@ const defaultSplitBits = 13
 // Consider, for example, the problem of adding EXIF tags to a JPEG image file.
 // The tags appear near the beginning of the file, and the bulk of the image data follows.
 // If the file were divided into chunks at (say) 8-kilobyte boundaries,
-// then adding EXIF data near the beginning would alter every following chunk
-// (except in the lucky case where the size of the added data is an exact multiple of 8kb).
+// then adding EXIF data near the beginning would alter every following chunk,
+// except in the lucky case where the size of the added data is an exact multiple of 8kb.
 // With hashsplitting, only the chunks in the vicinity of the change are affected.
 //
 // Hashsplitting is used to dramatically reduce storage and bandwidth requirements
-// in projects like git, rsync, bup, and perkeep.
+// in projects like rsync, bup, and perkeep.
 type Splitter struct {
 	// Reset says whether to reset the rollsum state to zero at the beginning of each new chunk.
 	// The default is false,
@@ -49,44 +49,18 @@ type Splitter struct {
 	// which means a chunk boundary occurs on average once every 8,192 bytes.
 	//
 	// (But thanks to math, that doesn't mean that 8,192 is the median chunk size.
-	// The median chunk size is actually the logarithm, base (SplitBits-1)/SplitBits, of 0.5.
+	// The median chunk size is actually the logarithm, base (2^SplitBits-1)/(2^SplitBits), of 0.5.
 	// That makes the median chunk size 5,678 when SplitBits==13.)
 	SplitBits uint
 
-	rs *rollsum.RollSum
-}
-
-// Chunk is the output produced by Split.
-// It contains a hashsplit sequence of the input bytes,
-// the length of that sequence,
-// and a "level."
-//
-// Why include the length in the chunk,
-// when the caller could simply compute len(chunk.Bytes)?
-// Because the caller might want to replace chunk.Bytes
-// with a compact representation of them,
-// such as a hash,
-// while leaving Len alone.
-// Tree,
-// in turn,
-// computes Offset and Size values from Chunk.Len,
-// not len(chunk.Bytes).
-//
-// The level of a chunk is the number of additional trailing rollsum bits,
-// beyond the number needed to make a chunk,
-// that were set when the chunk was made.
-// This number is used in constructing a hashsplit tree;
-// see Tree.
-type Chunk struct {
-	Bytes      []byte
-	Len, Level uint
+	rs *rollsum.RollSum // TODO: use a better, standardized rolling checksum. See github.com/hashsplit/hashsplit-spec.
 }
 
 // Split hashsplits its input using the default Splitter,
 // calling a callback for each chunk produced.
 //
 // See Splitter.Split for more detail.
-func Split(ctx context.Context, r io.Reader, f func(Chunk) error) error {
+func Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
 	s := &Splitter{SplitBits: defaultSplitBits}
 	return s.Split(ctx, r, f)
 }
@@ -94,11 +68,15 @@ func Split(ctx context.Context, r io.Reader, f func(Chunk) error) error {
 // Split hashsplits its input.
 //
 // Bytes are read from r one at a time and added to the current chunk.
-// The callback is invoked on the current chunk when s.SplitBits trailing bits of the rollsum state are set.
+// The callback is invoked on the current chunk when the rolling checksum has s.SplitBits trailing zeroes,
 // The final chunk is sent regardless of the rollsum state, naturally.
+// The "level" of a chunk,
+// also passed to the callback,
+// is the number of extra trailing zeroes in the rolling checksum.
 //
-// If the callback return an error, Split exits with that error.
-func (s *Splitter) Split(ctx context.Context, r io.Reader, f func(Chunk) error) error {
+// If the callback return an error,
+// Split exits with that error.
+func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
 	splitBits := s.SplitBits
 	if splitBits == 0 {
 		splitBits = defaultSplitBits
@@ -120,7 +98,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader, f func(Chunk) error) 
 				if tz >= splitBits {
 					extraBits = tz - splitBits
 				}
-				return f(Chunk{Bytes: b, Len: uint(len(b)), Level: extraBits})
+				return f(b, extraBits)
 			}
 			return nil
 		}
@@ -133,7 +111,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader, f func(Chunk) error) 
 			continue
 		}
 		if tz, shouldSplit := s.checkSplit(splitBits); shouldSplit {
-			err = f(Chunk{Bytes: b, Len: uint(len(b)), Level: tz - splitBits})
+			err = f(b, tz-splitBits)
 			if err != nil {
 				return err
 			}
@@ -155,18 +133,32 @@ func (s *Splitter) checkSplit(splitBits uint) (uint, bool) {
 	return tz, tz >= splitBits
 }
 
-// Node is a node in the tree returned by Tree.
+// Node is a node in the tree built by a TreeBuilder.
 // A interior node ("level 1" and higher) contains one or more subnodes as children.
 // A leaf node ("level 0") contains one or more byte slices,
-// which are hashsplit chunks of the input.
+// which are normally hashsplit chunks of the input.
 // Exactly one of Nodes and Leaves is non-empty.
 type Node struct {
-	Nodes        []*Node
-	Leaves       [][]byte
-	Size, Offset uint64
+	Nodes  []*Node
+	Leaves [][]byte
+
+	// Size is the number of bytes represented by this tree node.
+	// For a level-0 node this is normally the lengths of the byte slices in Leaves, added together.
+	// However, for some applications those byte slices are placeholders for the original data
+	// (such as when the original data is saved aside to separate storage).
+	// In those cases Size represents the original data, not the placeholder data in Leaves.
+	//
+	// For higher-level nodes, this is the sum of the Size fields in all child nodes.
+	Size uint64
+
+	// Offset is the byte position that this node represents in the original input stream,
+	// before splitting.
+	// It is equal to the sum of the Size fields of the siblings to this node's "left."
+	// Applications can use the Offset field for random access by position to any chunk in the original input stream.
+	Offset uint64
 }
 
-// Tree assembles the output of Split into a hashsplit tree.
+// TreeBuilder assembles the output of Split into a hashsplit tree.
 //
 // A hashsplit tree provides another level of space-and-bandwidth savings
 // over and above what Split gives you.
@@ -179,46 +171,80 @@ type Node struct {
 // with the property that only the tree nodes in the vicinity of the change will be affected.
 // Most subtrees will remain the same.
 //
-// Chunks of hashsplit output are collected in a "level 0" node until
-// one whose rolling checksum has levelBits extra bits set
-// (beyond the number needed to complete a chunk).
-// This adds the level-0 node as a child to a new level-1 node.
-// If 2*levelBits extra bits are set,
-// that adds the level-1 node to a new level-2 node,
-// and so on.
+// Tree nodes have "levels."
+// Nodes at level 0 are the leaves of the tree.
+// This is where the chunks of split data live.
+// Nodes at higher levels group lower-level Nodes together.
+type TreeBuilder struct {
+	levels []*Node
+}
+
+// NewTreeBuilder produces a new TreeBuilder.
+func NewTreeBuilder() *TreeBuilder {
+	return &TreeBuilder{levels: []*Node{new(Node)}}
+}
+
+// Add adds a new chunk to the TreeBuilder.
+// It is typical to call this function in the callback of Split as each chunk is produced.
 //
-// Return value is the root of the tree,
-// pruned to remove any singleton nodes.
-func Tree(inp <-chan Chunk) *Node {
-	levels := []*Node{new(Node)}
-
-	for chunk := range inp {
-		levels[0].Leaves = append(levels[0].Leaves, chunk.Bytes)
-		for _, n := range levels {
-			n.Size += uint64(chunk.Len)
+// Normally, size should be len(bytes).
+// However, some applications will prefer to save each split chunk aside to separate storage
+// rather than place all chunks in the tree.
+// In such a case, bytes will be a lookup key for recovering the original chunk,
+// and size should be the original size of the chunk (not the size of the lookup key).
+// This allows the Size and Offset fields of the nodes in the tree to be correct with respect to the original data.
+//
+// The level of a chunk is normally the level value passed to the Split callback.
+// It results in the creation of a new Node at the given level.
+// However, this produces a tree with an average branching factor of 2.
+// For wider fan-out (more children per node), the caller can reduce the value of level.
+func (tb *TreeBuilder) Add(bytes []byte, size int, level uint) {
+	tb.levels[0].Leaves = append(tb.levels[0].Leaves, bytes)
+	for _, n := range tb.levels {
+		n.Size += uint64(size)
+	}
+	for i := uint(0); i < level; i++ {
+		if i == uint(len(tb.levels))-1 {
+			tb.levels = append(tb.levels, &Node{
+				Size: tb.levels[i].Size,
+			})
 		}
-		for i := uint(0); i < chunk.Level; i++ {
-			if i == uint(len(levels))-1 {
-				levels = append(levels, &Node{
-					Size: levels[i].Size,
-				})
-			}
-			levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
-			levels[i] = &Node{
-				Offset: levels[i+1].Offset + levels[i+1].Size,
-			}
+		tb.levels[i+1].Nodes = append(tb.levels[i+1].Nodes, tb.levels[i])
+		tb.levels[i] = &Node{
+			Offset: tb.levels[i+1].Offset + tb.levels[i+1].Size,
 		}
 	}
-	if len(levels[0].Leaves) > 0 {
-		for i := 0; i < len(levels)-1; i++ {
-			levels[i+1].Nodes = append(levels[i+1].Nodes, levels[i])
+}
+
+// Root produces the root of the tree after all nodes have been added with calls to Add.
+func (tb *TreeBuilder) Root() *Node {
+	if len(tb.levels[0].Leaves) > 0 {
+		for i := 0; i < len(tb.levels)-1; i++ {
+			tb.levels[i+1].Nodes = append(tb.levels[i+1].Nodes, tb.levels[i])
 		}
 	}
 
-	root := levels[len(levels)-1]
+	root := tb.levels[len(tb.levels)-1]
 	for len(root.Nodes) == 1 {
 		root = root.Nodes[0]
 	}
 
 	return root
+}
+
+// Seek finds the level-0 node representing the given byte position
+// (i.e., the one where Offset <= pos < Offset+Size).
+func Seek(node *Node, pos uint64) *Node {
+	if pos < node.Offset || pos >= (node.Offset+node.Size) {
+		return nil
+	}
+	if len(node.Nodes) > 0 {
+		for _, subnode := range node.Nodes {
+			if n := Seek(subnode, pos); n != nil {
+				return n
+			}
+		}
+		return nil // Shouldn't happen
+	}
+	return node
 }
