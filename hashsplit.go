@@ -10,7 +10,10 @@ import (
 	"go4.org/rollsum"
 )
 
-const defaultSplitBits = 13
+const (
+	defaultSplitBits = 13
+	defaultMinSize   = 64
+)
 
 // Splitter hashsplits a byte sequence into chunks.
 //
@@ -32,16 +35,17 @@ const defaultSplitBits = 13
 // Hashsplitting is used to dramatically reduce storage and bandwidth requirements
 // in projects like rsync, bup, and perkeep.
 type Splitter struct {
-	// Reset says whether to reset the rollsum state to zero at the beginning of each new chunk.
-	// The default is false,
-	// as in go4.org/rollsum,
-	// but that means that a chunk's boundary is determined in part by the chunks that precede it.
-	// You probably want to set this to true to make your chunks independent of each other,
-	// unless you need go4.org/rollsum-compatible behavior.
-	Reset bool
-
-	// MinSize is the minimum chunk size. Only the final chunk may be smaller than this.
-	// The default is zero, meaning chunks may be any size. (But they are never empty.)
+	// MinSize is the minimum chunk size.
+	// Only the final chunk may be smaller than this.
+	// This should always be >= 64,
+	// which is the rolling checksum "window size."
+	// If it's less than the size of the checksum window,
+	// then the same window can span multiple chunks,
+	// meaning a chunk boundary is not independent of the preceding chunk.
+	// If you leave this set to zero,
+	// 64 is what you'll get.
+	// If you really mean "I want no minimum,"
+	// set this to 1.
 	MinSize int
 
 	// SplitBits is the number of trailing bits in the rolling checksum that must be set to produce a chunk.
@@ -77,12 +81,17 @@ func Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
 // If the callback return an error,
 // Split exits with that error.
 func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
+	minSize := s.MinSize
+	if minSize <= 0 {
+		minSize = defaultMinSize
+	}
+
 	splitBits := s.SplitBits
 	if splitBits == 0 {
 		splitBits = defaultSplitBits
 	}
 
-	s.reset()
+	s.rs = rollsum.New()
 
 	var b []byte
 	rr := bufio.NewReader(r)
@@ -107,7 +116,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) 
 		}
 		b = append(b, c)
 		s.rs.Roll(c)
-		if len(b) < s.MinSize {
+		if len(b) < minSize {
 			continue
 		}
 		if tz, shouldSplit := s.checkSplit(splitBits); shouldSplit {
@@ -116,15 +125,8 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) 
 				return err
 			}
 			b = []byte{}
-			if s.Reset {
-				s.reset()
-			}
 		}
 	}
-}
-
-func (s *Splitter) reset() {
-	s.rs = rollsum.New()
 }
 
 func (s *Splitter) checkSplit(splitBits uint) (uint, bool) {
