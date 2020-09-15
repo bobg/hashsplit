@@ -45,19 +45,7 @@ func TestTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var (
-		s  = new(Splitter)
-		tb = NewTreeBuilder()
-	)
-	err = s.Split(context.Background(), bytes.NewReader(text), func(chunk []byte, level uint) error {
-		tb.Add(chunk, len(chunk), level/2)
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	root := tb.Root()
+	root := buildTree(t, text)
 
 	if len(root.Nodes) != 2 {
 		t.Fatalf("want len(root.Nodes)==2, got %d", len(root.Nodes))
@@ -103,4 +91,36 @@ func TestTree(t *testing.T) {
 	if !bytes.Equal(text, reassembled) {
 		t.Error("reassembled text does not match original")
 	}
+}
+
+func BenchmarkTree(b *testing.B) {
+	text, err := ioutil.ReadFile("testdata/commonsense.txt")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		buildTree(b, text)
+	}
+}
+
+type fataler interface {
+	Fatal(...interface{})
+}
+
+func buildTree(f fataler, text []byte) *Node {
+	var (
+		s  = new(Splitter)
+		tb = NewTreeBuilder()
+	)
+	err := s.Split(context.Background(), bytes.NewReader(text), func(chunk []byte, level uint) error {
+		tb.Add(chunk, len(chunk), level/2)
+		return nil
+	})
+	if err != nil {
+		f.Fatal(err)
+	}
+	return tb.Root()
 }
