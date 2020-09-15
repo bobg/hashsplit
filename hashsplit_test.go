@@ -33,7 +33,7 @@ func TestSplit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	const wantChunks = 18
+	const wantChunks = 14
 	if i != wantChunks {
 		t.Errorf("got %d chunks, want %d", i, wantChunks)
 	}
@@ -50,21 +50,25 @@ func TestTree(t *testing.T) {
 	if len(root.Nodes) != 2 {
 		t.Fatalf("want len(root.Nodes)==2, got %d", len(root.Nodes))
 	}
-	if len(root.Nodes[0].Nodes) != 2 {
-		t.Fatalf("want len(root.Nodes[0].Nodes)==2, got %d", len(root.Nodes[0].Nodes))
+	if len(root.Nodes[0].Nodes) != 1 {
+		t.Fatalf("want len(root.Nodes[0].Nodes)==1, got %d", len(root.Nodes[0].Nodes))
 	}
-	if len(root.Nodes[0].Nodes[0].Leaves) != 8 {
-		t.Fatalf("want len(root.Nodes[0].Nodes[0].Leaves)==8, got %d", len(root.Nodes[0].Nodes[0].Leaves))
+	if len(root.Nodes[0].Nodes[0].Nodes) != 1 {
+		t.Fatalf("want len(root.Nodes[0].Nodes[0].Nodes)==1, got %d", len(root.Nodes[0].Nodes[0].Nodes))
 	}
-	if len(root.Nodes[0].Nodes[1].Leaves) != 7 {
-		t.Fatalf("want len(root.Nodes[0].Nodes[1].Leaves)==7, got %d", len(root.Nodes[0].Nodes[1].Leaves))
+	if len(root.Nodes[0].Nodes[0].Nodes[0].Nodes) != 3 {
+		t.Fatalf("want len(root.Nodes[0].Nodes[0].Nodes[0].Nodes)==3, got %d", len(root.Nodes[0].Nodes[0].Nodes[0].Nodes))
 	}
 	if len(root.Nodes[1].Nodes) != 1 {
 		t.Fatalf("want len(root.Nodes[1].Nodes)==1, got %d", len(root.Nodes[1].Nodes))
 	}
-	if len(root.Nodes[1].Nodes[0].Leaves) != 3 {
-		t.Fatalf("want len(root.Nodes[1].Nodes[0].Leaves)==3, got %d", len(root.Nodes[1].Nodes[0].Leaves))
+	if len(root.Nodes[1].Nodes[0].Nodes) != 2 {
+		t.Fatalf("want len(root.Nodes[1].Nodes[0].Nodes)==2, got %d", len(root.Nodes[1].Nodes[0].Nodes))
 	}
+	if len(root.Nodes[1].Nodes[0].Nodes[0].Nodes) != 1 {
+		t.Fatalf("want len(root.Nodes[1].Nodes[0].Nodes[0].Nodes)==1, got %d", len(root.Nodes[1].Nodes[0].Nodes[0].Nodes))
+	}
+	// TODO: Compare the complete tree with what's expected.
 
 	pr, pw := io.Pipe()
 	go func() {
@@ -116,7 +120,7 @@ func buildTree(f fataler, text []byte) *Node {
 		tb = NewTreeBuilder()
 	)
 	err := s.Split(context.Background(), bytes.NewReader(text), func(chunk []byte, level uint) error {
-		tb.Add(chunk, len(chunk), level/2)
+		tb.Add(chunk, len(chunk), level)
 		return nil
 	})
 	if err != nil {

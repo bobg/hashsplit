@@ -7,12 +7,13 @@ import (
 	"io"
 	"math/bits"
 
-	"go4.org/rollsum"
+	"github.com/chmduquesne/rollinghash/bozo32"
 )
 
 const (
 	defaultSplitBits = 13
-	defaultMinSize   = 64
+	windowSize       = 64
+	defaultMinSize   = windowSize
 )
 
 // Splitter hashsplits a byte sequence into chunks.
@@ -57,7 +58,12 @@ type Splitter struct {
 	// That makes the median chunk size 5,678 when SplitBits==13.)
 	SplitBits uint
 
-	rs *rollsum.RollSum // TODO: use a better, standardized rolling checksum. See github.com/hashsplit/hashsplit-spec.
+	// This rolling checksum started as chmduquesne's attempt to implement Rabin-Karp.
+	// It was not a correct implementation,
+	// but it nevertheless has excellent rolling-checksum properties.
+	// TODO: Use a standardized rolling checksum when a good one's available.
+	// See github.com/hashsplit/hashsplit-spec for more information.
+	rs *bozo32.Bozo32
 }
 
 // Split hashsplits its input using the default Splitter,
@@ -73,7 +79,7 @@ func Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
 //
 // Bytes are read from r one at a time and added to the current chunk.
 // The callback is invoked on the current chunk when the rolling checksum has s.SplitBits trailing zeroes,
-// The final chunk is sent regardless of the rollsum state, naturally.
+// The final chunk is sent regardless of the rolling checksum state, naturally.
 // The "level" of a chunk,
 // also passed to the callback,
 // is the number of extra trailing zeroes in the rolling checksum.
@@ -91,7 +97,9 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) 
 		splitBits = defaultSplitBits
 	}
 
-	s.rs = rollsum.New()
+	s.rs = bozo32.New()
+	var zeroes [windowSize]byte
+	s.rs.Write(zeroes[:]) // initialize the rolling checksum window
 
 	var b []byte
 	rr := bufio.NewReader(r)
@@ -130,7 +138,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) 
 }
 
 func (s *Splitter) checkSplit(splitBits uint) (uint, bool) {
-	h := s.rs.Digest()
+	h := s.rs.Sum32()
 	tz := uint(bits.TrailingZeros32(h))
 	return tz, tz >= splitBits
 }
