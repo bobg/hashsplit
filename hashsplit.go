@@ -7,7 +7,7 @@ import (
 	"io"
 	"math/bits"
 
-	"github.com/chmduquesne/rollinghash/bozo32"
+	"github.com/chmduquesne/rollinghash/buzhash32"
 )
 
 const (
@@ -58,12 +58,10 @@ type Splitter struct {
 	// That makes the median chunk size 5,678 when SplitBits==13.)
 	SplitBits uint
 
-	// This rolling checksum started as chmduquesne's attempt to implement Rabin-Karp.
-	// It was not a correct implementation,
-	// but it nevertheless has excellent rolling-checksum properties.
-	// TODO: Use a standardized rolling checksum when a good one's available.
-	// See github.com/hashsplit/hashsplit-spec for more information.
-	rs *bozo32.Bozo32
+	// This is the recommended rolling-checksum algorithm for hashsplitting
+	// according to the document at github.com/hashsplit/hashsplit-spec
+	// (presently in draft form).
+	rs *buzhash32.Buzhash32
 }
 
 // Split hashsplits its input using the default Splitter,
@@ -97,7 +95,7 @@ func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) 
 		splitBits = defaultSplitBits
 	}
 
-	s.rs = bozo32.New()
+	s.rs = buzhash32.New()
 	var zeroes [windowSize]byte
 	s.rs.Write(zeroes[:]) // initialize the rolling checksum window
 
