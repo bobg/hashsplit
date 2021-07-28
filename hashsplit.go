@@ -80,10 +80,11 @@ func Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
 // The final chunk is sent regardless of the rolling checksum state, naturally.
 // The "level" of a chunk,
 // also passed to the callback,
-// is the number of extra trailing zeroes in the rolling checksum.
+// is the number of extra trailing zeroes in the rolling checksum
+// (in excess of s.SplitBits).
 //
 // If the callback return an error,
-// Split exits with that error.
+// Split exits with that error without consuming all of r.
 func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
 	minSize := s.MinSize
 	if minSize <= 0 {
@@ -171,7 +172,7 @@ type Node struct {
 // A hashsplit tree provides another level of space-and-bandwidth savings
 // over and above what Split gives you.
 // Consider, again, the example of adding EXIF tags to a JPEG file.
-// Although most chunks of the file will be the same before and after adding tags,
+// Although most chunks of the hashsplitted file will be the same before and after adding tags,
 // the _list_ needed to reassemble those chunks into the original file will be very different:
 // all the unaffected chunks must shift position to accommodate the new EXIF-containing chunks.
 //
@@ -179,10 +180,15 @@ type Node struct {
 // with the property that only the tree nodes in the vicinity of the change will be affected.
 // Most subtrees will remain the same.
 //
-// Tree nodes have "levels."
-// Nodes at level 0 are the leaves of the tree.
-// This is where the chunks of split data live.
-// Nodes at higher levels group lower-level Nodes together.
+// Just as each chunk has a level L determined by the rolling checksum
+// (see Splitter.Split),
+// so does each node in the tree have a level, N.
+// Tree nodes at level 0 collect chunks at level 0,
+// up to and including a chunk at level L>0;
+// then a new level-0 node begins.
+// Tree nodes at level N>0 collect nodes at level N-1
+// up to and including a chunk at level L>N;
+// then a new level-N node begins.
 type TreeBuilder struct {
 	levels []*Node
 }
