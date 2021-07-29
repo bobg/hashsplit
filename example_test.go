@@ -1,18 +1,12 @@
 package hashsplit
 
-import (
-	"context"
-	"io"
-)
+import "io"
 
 func ExampleTreeBuilder() {
-	var (
-		ctx context.Context
-		r   io.Reader // Represents the source of some data.
-	)
+	var r io.Reader // Represents the source of some data.
 
 	tb := NewTreeBuilder()
-	err := Split(ctx, r, func(bytes []byte, level uint) error {
+	err := Split(r, func(bytes []byte, level uint) error {
 		tb.Add(bytes, len(bytes), level)
 		return nil
 	})
@@ -23,22 +17,18 @@ func ExampleTreeBuilder() {
 }
 
 func ExampleTreeBuilder_saveAside() {
-	var (
-		ctx context.Context
-		r   io.Reader // Represents the source of some data.
+	var r io.Reader // Represents the source of some data.
 
-		// Represents any function that replaces a chunk with a compact representation of that chunk
-		// (like a hash or a lookup key).
-		saveAside func(context.Context, []byte) ([]byte, error)
-	)
+	// Represents any function that replaces a chunk with a compact representation of that chunk
+	// (like a hash or a lookup key).
+	var saveAside func([]byte) ([]byte, error)
 
 	tb := NewTreeBuilder()
-
-	err := Split(ctx, r, func(chunk []byte, level uint) error {
+	err := Split(r, func(chunk []byte, level uint) error {
 		size := len(chunk)
 
 		// Replace chunk with a compact representation.
-		repr, err := saveAside(ctx, chunk)
+		repr, err := saveAside(chunk)
 		if err != nil {
 			return err
 		}
@@ -57,13 +47,10 @@ func ExampleTreeBuilder_saveAside() {
 }
 
 func ExampleTreeBuilder_fanOut() {
-	var (
-		ctx context.Context
-		r   io.Reader // Represents the source of some data.
-	)
+	var r io.Reader // Represents the source of some data.
 
 	tb := NewTreeBuilder()
-	err := Split(ctx, r, func(bytes []byte, level uint) error {
+	err := Split(r, func(bytes []byte, level uint) error {
 		// Map level to a smaller range for wider fan-out.
 		tb.Add(bytes, len(bytes), level/4)
 		return nil

@@ -2,7 +2,6 @@ package hashsplit
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,7 +18,7 @@ func TestSplit(t *testing.T) {
 	defer f.Close()
 
 	var i int
-	err = Split(context.Background(), f, func(chunk []byte, level uint) error {
+	err = Split(f, func(chunk []byte, level uint) error {
 		i++
 		if true {
 			return ioutil.WriteFile(fmt.Sprintf("testdata/chunk%02d", i), chunk, 0644)
@@ -101,14 +100,16 @@ type fataler interface {
 }
 
 func buildTree(f fataler, text []byte) *Node {
-	var (
-		s  = new(Splitter)
-		tb = NewTreeBuilder()
-	)
-	err := s.Split(context.Background(), bytes.NewReader(text), func(chunk []byte, level uint) error {
+	tb := NewTreeBuilder()
+	s := NewSplitter(func(chunk []byte, level uint) error {
 		tb.Add(chunk, len(chunk), level)
 		return nil
 	})
+	_, err := s.Write(text)
+	if err != nil {
+		f.Fatal(err)
+	}
+	err = s.Close()
 	if err != nil {
 		f.Fatal(err)
 	}

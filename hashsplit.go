@@ -2,8 +2,6 @@
 package hashsplit
 
 import (
-	"bufio"
-	"context"
 	"io"
 	"math/bits"
 
@@ -17,11 +15,12 @@ const (
 )
 
 // Splitter hashsplits a byte sequence into chunks.
+// It implements the io.WriteCloser interface.
 //
 // Hashsplitting is a way of dividing a byte stream into pieces
 // based on the stream's content rather than on any predetermined chunk size.
 // As the Splitter reads the stream it maintains a rolling checksum of the last several bytes.
-// A chunk boundary occurs when the rolling checksum has enough trailing bits set
+// A chunk boundary occurs when the rolling checksum has enough trailing bits set to zero
 // (where "enough" is a configurable setting that determines the average chunk size).
 //
 // Hashsplitting has benefits when it comes to representing multiple,
@@ -49,7 +48,7 @@ type Splitter struct {
 	// set this to 1.
 	MinSize int
 
-	// SplitBits is the number of trailing bits in the rolling checksum that must be set to produce a chunk.
+	// SplitBits is the number of trailing zero bits in the rolling checksum required to produce a chunk.
 	// The default (what you get if you leave it set to zero) is 13,
 	// which means a chunk boundary occurs on average once every 8,192 bytes.
 	//
@@ -58,88 +57,105 @@ type Splitter struct {
 	// That makes the median chunk size 5,678 when SplitBits==13.)
 	SplitBits uint
 
+	// The function to invoke on each chunk produced during ReadFrom or Write.
+	f func([]byte, uint) error
+
+	// The chunk being built.
+	chunk []byte
+
 	// This is the recommended rolling-checksum algorithm for hashsplitting
 	// according to the document at github.com/hashsplit/hashsplit-spec
 	// (presently in draft form).
 	rs *buzhash32.Buzhash32
 }
 
-// Split hashsplits its input using the default Splitter,
-// calling a callback for each chunk produced.
-//
-// See Splitter.Split for more detail.
-func Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
-	s := &Splitter{SplitBits: defaultSplitBits}
-	return s.Split(ctx, r, f)
+// Split hashsplits its input using a default Splitter and the given callback to process chunks.
+// See NewSplitter for details about the callback.
+func Split(r io.Reader, f func([]byte, uint) error) error {
+	s := NewSplitter(f)
+	_, err := io.Copy(s, r)
+	if err != nil {
+		return err
+	}
+	return s.Close()
 }
 
-// Split hashsplits its input.
+// NewSplitter produces a new Splitter with the given callback.
+// The Splitter is an io.WriteCloser.
+// As bytes are written to it,
+// it finds chunk boundaries and calls the callback.
 //
-// Bytes are read from r one at a time and added to the current chunk.
-// The callback is invoked on the current chunk when the rolling checksum has s.SplitBits trailing zeroes,
-// The final chunk is sent regardless of the rolling checksum state, naturally.
-// The "level" of a chunk,
-// also passed to the callback,
-// is the number of extra trailing zeroes in the rolling checksum
-// (in excess of s.SplitBits).
+// The callback receives the bytes of the chunk,
+// and the chunk's "level,"
+// which is the number of extra trailing zeroes in the rolling checksum
+// (in excess of Splitter.SplitBits).
 //
-// If the callback return an error,
-// Split exits with that error without consuming all of r.
-func (s *Splitter) Split(ctx context.Context, r io.Reader, f func([]byte, uint) error) error {
+// Do not forget to call Close on the Splitter
+// to flush any remaining chunk from its internal buffer.
+func NewSplitter(f func([]byte, uint) error) *Splitter {
+	rs := buzhash32.New()
+	var zeroes [windowSize]byte
+	rs.Write(zeroes[:]) // initialize the rolling checksum window
+
+	return &Splitter{
+		f:  f,
+		rs: rs,
+	}
+}
+
+// Write implements io.Writer.
+// May produce one or more calls to the callback in s,
+// as chunks are discovered.
+// Any error from the callback will cause Write to return early with that error.
+func (s *Splitter) Write(inp []byte) (int, error) {
 	minSize := s.MinSize
 	if minSize <= 0 {
 		minSize = defaultMinSize
 	}
+	for i, c := range inp {
+		s.chunk = append(s.chunk, c)
+		s.rs.Roll(c)
+		if len(s.chunk) < minSize {
+			continue
+		}
+		if level, shouldSplit := s.checkSplit(); shouldSplit {
+			err := s.f(s.chunk, level)
+			if err != nil {
+				return i, err
+			}
+			s.chunk = nil
+		}
+	}
+	return len(inp), nil
+}
 
+// Close implements io.Closer.
+// It is necessary to call Close to flush any buffered chunk remaining.
+// Calling Close may result in a call to the callback in s.
+// Close is idempotent:
+// it can safely be called multiple times without error
+// (and without producing the final chunk multiple times).
+func (s *Splitter) Close() error {
+	if len(s.chunk) == 0 {
+		return nil
+	}
+	level, _ := s.checkSplit()
+	err := s.f(s.chunk, level)
+	s.chunk = nil
+	return err
+}
+
+func (s *Splitter) checkSplit() (uint, bool) {
 	splitBits := s.SplitBits
 	if splitBits == 0 {
 		splitBits = defaultSplitBits
 	}
-
-	s.rs = buzhash32.New()
-	var zeroes [windowSize]byte
-	s.rs.Write(zeroes[:]) // initialize the rolling checksum window
-
-	var b []byte
-	rr := bufio.NewReader(r)
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		c, err := rr.ReadByte()
-		if err == io.EOF {
-			if len(b) > 0 {
-				tz, _ := s.checkSplit(splitBits)
-				var extraBits uint
-				if tz >= splitBits {
-					extraBits = tz - splitBits
-				}
-				return f(b, extraBits)
-			}
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		b = append(b, c)
-		s.rs.Roll(c)
-		if len(b) < minSize {
-			continue
-		}
-		if tz, shouldSplit := s.checkSplit(splitBits); shouldSplit {
-			err = f(b, tz-splitBits)
-			if err != nil {
-				return err
-			}
-			b = []byte{}
-		}
-	}
-}
-
-func (s *Splitter) checkSplit(splitBits uint) (uint, bool) {
 	h := s.rs.Sum32()
 	tz := uint(bits.TrailingZeros32(h))
-	return tz, tz >= splitBits
+	if tz >= splitBits {
+		return tz - splitBits, true
+	}
+	return 0, false
 }
 
 // Node is a node in the tree built by a TreeBuilder.
@@ -167,7 +183,7 @@ type Node struct {
 	Offset uint64
 }
 
-// TreeBuilder assembles the output of Split into a hashsplit tree.
+// TreeBuilder assembles a sequence of chunks into a hashsplit tree.
 //
 // A hashsplit tree provides another level of space-and-bandwidth savings
 // over and above what Split gives you.
@@ -177,11 +193,13 @@ type Node struct {
 // all the unaffected chunks must shift position to accommodate the new EXIF-containing chunks.
 //
 // A hashsplit tree organizes that list into a tree instead,
-// with the property that only the tree nodes in the vicinity of the change will be affected.
+// whose shape is determined by the content of the chunks,
+// just as the chunk boundaries are.
+// It has the property that only the tree nodes in the vicinity of the change will be affected.
 // Most subtrees will remain the same.
 //
 // Just as each chunk has a level L determined by the rolling checksum
-// (see Splitter.Split),
+// (see NewSplitter),
 // so does each node in the tree have a level, N.
 // Tree nodes at level 0 collect chunks at level 0,
 // up to and including a chunk at level L>0;
