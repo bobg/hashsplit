@@ -30,4 +30,22 @@ up to and including a chunk at level L>N;
 then a new level-N node begins.
 
 Hashsplitting is used to dramatically reduce storage and bandwidth requirements
-in projects like rsync, bup, and perkeep.
+in projects like
+[rsync](https://rsync.samba.org/),
+[bup](http://bup.github.io/),
+and [perkeep](https://perkeep.org/).
+More information,
+and a proposed standard,
+can be found at
+[github.com/hashsplit/hashsplit-spec](github.com/hashsplit/hashsplit-spec).
+
+Note: an earlier version of this package included a Splitter.Split method,
+which allowed a Splitter `s` to consume all of the input from an io.Reader `r`.
+This has been removed.
+The same behavior can be obtained simply by doing:
+
+```go
+_, err := io.Copy(s, r)
+if err != nil { ... }
+err = s.Close()
+```
