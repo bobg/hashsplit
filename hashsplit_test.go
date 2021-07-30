@@ -93,19 +93,23 @@ func TestSeek(t *testing.T) {
 	cases := []struct {
 		name string
 		pos  uint64
-		want *Node
+		want *TreeBuilderNode
 	}{
-		{"left end", 0, &Node{Leaves: [][]byte{nil, nil}, Size: 35796}},
-		{"right end", 31483 + 116651 - 1, &Node{Leaves: [][]byte{nil, nil, nil}, Size: 31483, Offset: 116651}},
+		{"left end", 0, &TreeBuilderNode{Leaves: [][]byte{nil, nil}, size: 35796}},
+		{"right end", 31483 + 116651 - 1, &TreeBuilderNode{Leaves: [][]byte{nil, nil, nil}, size: 31483, offset: 116651}},
 		{"past the end", 31483 + 116651, nil},
-		{"in the middle", 100000, &Node{Leaves: [][]byte{nil}, Size: 6775, Offset: 98993}},
+		{"in the middle", 100000, &TreeBuilderNode{Leaves: [][]byte{nil}, size: 6775, offset: 98993}},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := Seek(root, c.pos)
-			if !compareTrees(got, c.want) {
-				t.Errorf("got %+v, want %+v", got, c.want)
+			var gottb *TreeBuilderNode
+			if got != nil {
+				gottb = got.(*TreeBuilderNode)
+			}
+			if !compareTrees(gottb, c.want) {
+				t.Errorf("got %+v, want %+v", gottb, c.want)
 			}
 		})
 	}
