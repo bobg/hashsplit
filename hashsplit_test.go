@@ -82,6 +82,35 @@ func TestTree(t *testing.T) {
 	}
 }
 
+func TestSeek(t *testing.T) {
+	text, err := ioutil.ReadFile("testdata/commonsense.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root := buildTree(t, text)
+
+	cases := []struct {
+		name string
+		pos  uint64
+		want *Node
+	}{
+		{"left end", 0, &Node{Leaves: [][]byte{nil, nil}, Size: 35796}},
+		{"right end", 31483 + 116651 - 1, &Node{Leaves: [][]byte{nil, nil, nil}, Size: 31483, Offset: 116651}},
+		{"past the end", 31483 + 116651, nil},
+		{"in the middle", 100000, &Node{Leaves: [][]byte{nil}, Size: 6775, Offset: 98993}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Seek(root, c.pos)
+			if !compareTrees(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
 func BenchmarkTree(b *testing.B) {
 	text, err := ioutil.ReadFile("testdata/commonsense.txt")
 	if err != nil {
@@ -118,6 +147,12 @@ func buildTree(f fataler, text []byte) *Node {
 
 // Compares two trees, disregarding the contents of the leaves.
 func compareTrees(a, b *Node) bool {
+	if a == nil {
+		return b == nil
+	}
+	if b == nil {
+		return false
+	}
 	if len(a.Nodes) != len(b.Nodes) {
 		return false
 	}
