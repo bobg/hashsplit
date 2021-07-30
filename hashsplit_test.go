@@ -58,11 +58,11 @@ func TestTree(t *testing.T) {
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		var walk func(node *Node)
-		walk = func(node *Node) {
+		var walk func(node *TreeBuilderNode)
+		walk = func(node *TreeBuilderNode) {
 			if len(node.Nodes) > 0 {
 				for _, child := range node.Nodes {
-					walk(child)
+					walk(child.(*TreeBuilderNode))
 				}
 			} else {
 				for _, leaf := range node.Leaves {
@@ -99,8 +99,8 @@ type fataler interface {
 	Fatal(...interface{})
 }
 
-func buildTree(f fataler, text []byte) *Node {
-	tb := NewTreeBuilder()
+func buildTree(f fataler, text []byte) *TreeBuilderNode {
+	var tb TreeBuilder
 	s := NewSplitter(func(chunk []byte, level uint) error {
 		tb.Add(chunk, len(chunk), level)
 		return nil
@@ -113,31 +113,63 @@ func buildTree(f fataler, text []byte) *Node {
 	if err != nil {
 		f.Fatal(err)
 	}
-	return tb.Root()
+	root, err := tb.Root()
+	if err != nil {
+		f.Fatal(err)
+	}
+	return root.(*TreeBuilderNode)
 }
 
 // Compares two trees, disregarding the contents of the leaves.
-func compareTrees(a, b *Node) bool {
+func compareTrees(a, b *TreeBuilderNode) bool {
 	if len(a.Nodes) != len(b.Nodes) {
 		return false
 	}
 	if len(a.Leaves) != len(b.Leaves) {
 		return false
 	}
-	if a.Size != b.Size {
+	if a.size != b.size {
 		return false
 	}
-	if a.Offset != b.Offset {
+	if a.offset != b.offset {
 		return false
 	}
 
 	for i := 0; i < len(a.Nodes); i++ {
-		if !compareTrees(a.Nodes[i], b.Nodes[i]) {
+		if !compareTrees(a.Nodes[i].(*TreeBuilderNode), b.Nodes[i].(*TreeBuilderNode)) {
 			return false
 		}
 	}
 
 	return true
+}
+
+type jsonTBNode struct {
+	Nodes        []*jsonTBNode
+	Leaves       [][]byte
+	Size, Offset uint64
+}
+
+func (j jsonTBNode) toTBNode() *TreeBuilderNode {
+	result := &TreeBuilderNode{
+		Leaves: j.Leaves,
+		size:   j.Size,
+		offset: j.Offset,
+	}
+	for _, n := range j.Nodes {
+		result.Nodes = append(result.Nodes, n.toTBNode())
+	}
+	return result
+}
+
+func (n *TreeBuilderNode) UnmarshalJSON(inp []byte) error {
+	var j jsonTBNode
+	err := json.Unmarshal(inp, &j)
+	if err != nil {
+		return err
+	}
+	*n = *(j.toTBNode())
+	return nil
 }
 
 // The shape, but not the leaf content, of the expected tree.
@@ -261,10 +293,10 @@ const wantTreeJSON = `
   "Offset": 0
 }`
 
-var wantTree *Node
+var wantTree *TreeBuilderNode
 
 func init() {
-	var w Node
+	var w TreeBuilderNode
 	err := json.Unmarshal([]byte(wantTreeJSON), &w)
 	if err != nil {
 		panic(err)

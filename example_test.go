@@ -5,7 +5,7 @@ import "io"
 func ExampleTreeBuilder() {
 	var r io.Reader // Represents the source of some data.
 
-	tb := NewTreeBuilder()
+	var tb TreeBuilder
 	err := Split(r, func(bytes []byte, level uint) error {
 		tb.Add(bytes, len(bytes), level)
 		return nil
@@ -23,7 +23,7 @@ func ExampleTreeBuilder_saveAside() {
 	// (like a hash or a lookup key).
 	var saveAside func([]byte) ([]byte, error)
 
-	tb := NewTreeBuilder()
+	var tb TreeBuilder
 	err := Split(r, func(chunk []byte, level uint) error {
 		size := len(chunk)
 
@@ -49,7 +49,7 @@ func ExampleTreeBuilder_saveAside() {
 func ExampleTreeBuilder_fanOut() {
 	var r io.Reader // Represents the source of some data.
 
-	tb := NewTreeBuilder()
+	var tb TreeBuilder
 	err := Split(r, func(bytes []byte, level uint) error {
 		// Map level to a smaller range for wider fan-out.
 		tb.Add(bytes, len(bytes), level/4)

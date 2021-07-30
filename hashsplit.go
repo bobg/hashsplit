@@ -158,13 +158,20 @@ func (s *Splitter) checkSplit() (uint, bool) {
 	return 0, false
 }
 
+type Node interface {
+	Offset() uint64
+	Size() uint64
+	NumChildren() int
+	Child(int) Node
+}
+
 // Node is a node in the tree built by a TreeBuilder.
 // A interior node ("level 1" and higher) contains one or more subnodes as children.
 // A leaf node ("level 0") contains one or more byte slices,
 // which are normally hashsplit chunks of the input.
 // Exactly one of Nodes and Leaves is non-empty.
-type Node struct {
-	Nodes  []*Node
+type TreeBuilderNode struct {
+	Nodes  []Node
 	Leaves [][]byte
 
 	// Size is the number of bytes represented by this tree node.
@@ -174,14 +181,19 @@ type Node struct {
 	// In those cases Size represents the original data, not the placeholder data in Leaves.
 	//
 	// For higher-level nodes, this is the sum of the Size fields in all child nodes.
-	Size uint64
+	size uint64
 
 	// Offset is the byte position that this node represents in the original input stream,
 	// before splitting.
 	// It is equal to the sum of the Size fields of the siblings to this node's "left."
 	// Applications can use the Offset field for random access by position to any chunk in the original input stream.
-	Offset uint64
+	offset uint64
 }
+
+func (n TreeBuilderNode) Offset() uint64   { return n.offset }
+func (n TreeBuilderNode) Size() uint64     { return n.size }
+func (n TreeBuilderNode) NumChildren() int { return len(n.Nodes) }
+func (n TreeBuilderNode) Child(i int) Node { return n.Nodes[i] }
 
 // TreeBuilder assembles a sequence of chunks into a hashsplit tree.
 //
@@ -208,12 +220,9 @@ type Node struct {
 // up to and including a chunk at level L>N;
 // then a new level-N node begins.
 type TreeBuilder struct {
-	levels []*Node
-}
+	F func(*TreeBuilderNode) (Node, error)
 
-// NewTreeBuilder produces a new TreeBuilder.
-func NewTreeBuilder() *TreeBuilder {
-	return &TreeBuilder{levels: []*Node{new(Node)}}
+	levels []*TreeBuilderNode
 }
 
 // Add adds a new chunk to the TreeBuilder.
@@ -230,53 +239,79 @@ func NewTreeBuilder() *TreeBuilder {
 // It results in the creation of a new Node at the given level.
 // However, this produces a tree with an average branching factor of 2.
 // For wider fan-out (more children per node), the caller can reduce the value of level.
-func (tb *TreeBuilder) Add(bytes []byte, size int, level uint) {
+func (tb *TreeBuilder) Add(bytes []byte, size int, level uint) error {
+	if len(tb.levels) == 0 {
+		tb.levels = []*TreeBuilderNode{new(TreeBuilderNode)}
+	}
 	tb.levels[0].Leaves = append(tb.levels[0].Leaves, bytes)
 	for _, n := range tb.levels {
-		n.Size += uint64(size)
+		n.size += uint64(size)
 	}
 	for i := uint(0); i < level; i++ {
 		if i == uint(len(tb.levels))-1 {
-			tb.levels = append(tb.levels, &Node{
-				Size: tb.levels[i].Size,
+			tb.levels = append(tb.levels, &TreeBuilderNode{
+				size: tb.levels[i].size,
 			})
 		}
-		tb.levels[i+1].Nodes = append(tb.levels[i+1].Nodes, tb.levels[i])
-		tb.levels[i] = &Node{
-			Offset: tb.levels[i+1].Offset + tb.levels[i+1].Size,
+		var n Node = tb.levels[i]
+		if tb.F != nil {
+			var err error
+			n, err = tb.F(tb.levels[i])
+			if err != nil {
+				return err
+			}
+		}
+		tb.levels[i+1].Nodes = append(tb.levels[i+1].Nodes, n)
+		tb.levels[i] = &TreeBuilderNode{
+			offset: tb.levels[i+1].offset + tb.levels[i+1].size,
 		}
 	}
+	return nil
 }
 
 // Root produces the root of the tree after all nodes have been added with calls to Add.
-func (tb *TreeBuilder) Root() *Node {
+func (tb *TreeBuilder) Root() (Node, error) {
 	if len(tb.levels[0].Leaves) > 0 {
 		for i := 0; i < len(tb.levels)-1; i++ {
-			tb.levels[i+1].Nodes = append(tb.levels[i+1].Nodes, tb.levels[i])
+			var n Node = tb.levels[i]
+			if tb.F != nil {
+				var err error
+				n, err = tb.F(tb.levels[i])
+				if err != nil {
+					return nil, err
+				}
+			}
+			tb.levels[i+1].Nodes = append(tb.levels[i+1].Nodes, n)
 		}
 	}
 
-	root := tb.levels[len(tb.levels)-1]
-	for len(root.Nodes) == 1 {
-		root = root.Nodes[0]
+	var root Node = tb.levels[len(tb.levels)-1]
+	for root.NumChildren() == 1 {
+		root = root.Child(0)
 	}
 
-	return root
+	return root, nil
 }
 
 // Seek finds the level-0 node representing the given byte position
 // (i.e., the one where Offset <= pos < Offset+Size).
-func Seek(node *Node, pos uint64) *Node {
-	if pos < node.Offset || pos >= (node.Offset+node.Size) {
+func Seek(n Node, pos uint64) Node {
+	if pos < n.Offset() || pos >= (n.Offset()+n.Size()) {
 		return nil
 	}
-	if len(node.Nodes) > 0 {
-		for _, subnode := range node.Nodes {
-			if n := Seek(subnode, pos); n != nil {
-				return n
-			}
-		}
-		return nil // Shouldn't happen
+
+	num := n.NumChildren()
+	if num == 0 {
+		return n
 	}
-	return node
+
+	for i := 0; i < num; i++ {
+		child := n.Child(i)
+		if n := Seek(child, pos); n != nil {
+			return n
+		}
+	}
+
+	// With a properly formed tree of nodes this will not be reached.
+	return nil
 }
