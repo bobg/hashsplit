@@ -135,7 +135,7 @@ type fataler interface {
 func buildTree(f fataler, text []byte) *TreeBuilderNode {
 	var tb TreeBuilder
 	s := NewSplitter(func(chunk []byte, level uint) error {
-		tb.Add(chunk, len(chunk), level)
+		tb.Add(chunk, level)
 		return nil
 	})
 	_, err := s.Write(text)
