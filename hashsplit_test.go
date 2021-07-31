@@ -65,8 +65,8 @@ func TestTree(t *testing.T) {
 					walk(child.(*TreeBuilderNode))
 				}
 			} else {
-				for _, leaf := range node.Leaves {
-					pw.Write(leaf)
+				for _, chunk := range node.Chunks {
+					pw.Write(chunk)
 				}
 			}
 		}
@@ -95,10 +95,10 @@ func TestSeek(t *testing.T) {
 		pos  uint64
 		want *TreeBuilderNode
 	}{
-		{"left end", 0, &TreeBuilderNode{Leaves: [][]byte{nil, nil}, size: 35796}},
-		{"right end", 31483 + 116651 - 1, &TreeBuilderNode{Leaves: [][]byte{nil, nil, nil}, size: 31483, offset: 116651}},
+		{"left end", 0, &TreeBuilderNode{Chunks: [][]byte{nil, nil}, size: 35796}},
+		{"right end", 31483 + 116651 - 1, &TreeBuilderNode{Chunks: [][]byte{nil, nil, nil}, size: 31483, offset: 116651}},
 		{"past the end", 31483 + 116651, nil},
-		{"in the middle", 100000, &TreeBuilderNode{Leaves: [][]byte{nil}, size: 6775, offset: 98993}},
+		{"in the middle", 100000, &TreeBuilderNode{Chunks: [][]byte{nil}, size: 6775, offset: 98993}},
 	}
 
 	for _, c := range cases {
@@ -164,7 +164,7 @@ func compareTrees(a, b *TreeBuilderNode) bool {
 	if len(a.Nodes) != len(b.Nodes) {
 		return false
 	}
-	if len(a.Leaves) != len(b.Leaves) {
+	if len(a.Chunks) != len(b.Chunks) {
 		return false
 	}
 	if a.size != b.size {
@@ -185,13 +185,13 @@ func compareTrees(a, b *TreeBuilderNode) bool {
 
 type jsonTBNode struct {
 	Nodes        []*jsonTBNode
-	Leaves       [][]byte
+	Chunks       [][]byte
 	Size, Offset uint64
 }
 
 func (j jsonTBNode) toTBNode() *TreeBuilderNode {
 	result := &TreeBuilderNode{
-		Leaves: j.Leaves,
+		Chunks: j.Chunks,
 		size:   j.Size,
 		offset: j.Offset,
 	}
@@ -222,7 +222,7 @@ const wantTreeJSON = `
             {
               "Nodes": [
                 {
-                  "Leaves": ["", ""],
+                  "Chunks": ["", ""],
                   "Size": 35796,
                   "Offset": 0
                 }
@@ -239,7 +239,7 @@ const wantTreeJSON = `
             {
               "Nodes": [
                 {
-                  "Leaves": ["", "", ""],
+                  "Chunks": ["", "", ""],
                   "Size": 38104,
                   "Offset": 35796
                 }
@@ -256,7 +256,7 @@ const wantTreeJSON = `
             {
               "Nodes": [
                 {
-                  "Leaves": ["", ""],
+                  "Chunks": ["", ""],
                   "Size": 24177,
                   "Offset": 73900
                 }
@@ -279,7 +279,7 @@ const wantTreeJSON = `
             {
               "Nodes": [
                 {
-                  "Leaves": [""],
+                  "Chunks": [""],
                   "Size": 916,
                   "Offset": 98077
                 }
@@ -290,7 +290,7 @@ const wantTreeJSON = `
             {
               "Nodes": [
                 {
-                  "Leaves": [""],
+                  "Chunks": [""],
                   "Size": 6775,
                   "Offset": 98993
                 }
@@ -301,17 +301,17 @@ const wantTreeJSON = `
             {
               "Nodes": [
                 {
-                  "Leaves": [""],
+                  "Chunks": [""],
                   "Size": 557,
                   "Offset": 105768
                 },
                 {
-                  "Leaves": ["", "", ""],
+                  "Chunks": ["", "", ""],
                   "Size": 10326,
                   "Offset": 106325
                 },
                 {
-                  "Leaves": ["", "", ""],
+                  "Chunks": ["", "", ""],
                   "Size": 31483,
                   "Offset": 116651
                 }

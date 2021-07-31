@@ -22,12 +22,12 @@ func ExampleTreeBuilder_saveAside() {
 
 	tb := TreeBuilder{
 		F: func(node *TreeBuilderNode) (Node, error) {
-			for i, chunk := range node.Leaves {
+			for i, chunk := range node.Chunks {
 				repr, err := saveAside(chunk)
 				if err != nil {
 					return nil, err
 				}
-				node.Leaves[i] = repr
+				node.Chunks[i] = repr
 			}
 			return node, nil
 		},

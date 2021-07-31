@@ -180,16 +180,16 @@ type Node interface {
 //
 // A interior node ("level 1" and higher) contains one or more subnodes as children.
 // A leaf node ("level 0") contains one or more byte slices,
-// which are normally hashsplit chunks of the input.
-// Exactly one of Nodes and Leaves is non-empty.
+// which are hashsplit chunks of the input.
+// Exactly one of Nodes and Chunks is non-empty.
 type TreeBuilderNode struct {
 	// Nodes is the list of subnodes.
 	// This is empty for leaf nodes (level 0) and non-empty for interior nodes (level 1 and higher).
 	Nodes []Node
 
-	// Leaves is a list of chunks.
+	// Chunks is a list of chunks.
 	// This is non-empty for leaf nodes (level 0) and empty for interior nodes (level 1 and higher).
-	Leaves [][]byte
+	Chunks [][]byte
 
 	size, offset uint64
 }
@@ -268,7 +268,7 @@ func (tb *TreeBuilder) Add(bytes []byte, level uint) error {
 	if len(tb.levels) == 0 {
 		tb.levels = []*TreeBuilderNode{new(TreeBuilderNode)}
 	}
-	tb.levels[0].Leaves = append(tb.levels[0].Leaves, bytes)
+	tb.levels[0].Chunks = append(tb.levels[0].Chunks, bytes)
 	for _, n := range tb.levels {
 		n.size += uint64(len(bytes))
 	}
@@ -307,7 +307,7 @@ func (tb *TreeBuilder) Root() (Node, error) {
 		return nil, nil
 	}
 
-	if len(tb.levels[0].Leaves) > 0 {
+	if len(tb.levels[0].Chunks) > 0 {
 		for i := 0; i < len(tb.levels)-1; i++ {
 			var n Node = tb.levels[i]
 			if tb.F != nil {
