@@ -37,7 +37,7 @@ and [perkeep](https://perkeep.org/).
 More information,
 and a proposed standard,
 can be found at
-[github.com/hashsplit/hashsplit-spec](github.com/hashsplit/hashsplit-spec).
+[github.com/hashsplit/hashsplit-spec](https://github.com/hashsplit/hashsplit-spec).
 
 Note: an earlier version of this package included a Splitter.Split method,
 which allowed a Splitter `s` to consume all of the input from an io.Reader `r`.
