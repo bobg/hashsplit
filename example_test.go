@@ -1,12 +1,16 @@
-package hashsplit
+package hashsplit_test
 
-import "io"
+import (
+	"io"
+
+	"github.com/bobg/hashsplit/v2"
+)
 
 func ExampleTreeBuilder() {
 	var r io.Reader // Represents the source of some data.
 
-	var tb TreeBuilder
-	err := Split(r, tb.Add)
+	var tb hashsplit.TreeBuilder
+	err := hashsplit.Split(r, tb.Add)
 	if err != nil {
 		panic(err)
 	}
@@ -20,8 +24,8 @@ func ExampleTreeBuilder_saveAside() {
 	// (like a hash or a lookup key).
 	var saveAside func([]byte) ([]byte, error)
 
-	tb := TreeBuilder{
-		F: func(node *TreeBuilderNode) (Node, error) {
+	tb := hashsplit.TreeBuilder{
+		F: func(node *hashsplit.TreeBuilderNode) (hashsplit.Node, error) {
 			for i, chunk := range node.Chunks {
 				repr, err := saveAside(chunk)
 				if err != nil {
@@ -32,7 +36,7 @@ func ExampleTreeBuilder_saveAside() {
 			return node, nil
 		},
 	}
-	err := Split(r, tb.Add)
+	err := hashsplit.Split(r, tb.Add)
 	if err != nil {
 		panic(err)
 	}
@@ -42,8 +46,8 @@ func ExampleTreeBuilder_saveAside() {
 func ExampleTreeBuilder_fanOut() {
 	var r io.Reader // Represents the source of some data.
 
-	var tb TreeBuilder
-	err := Split(r, func(bytes []byte, level uint) error {
+	var tb hashsplit.TreeBuilder
+	err := hashsplit.Split(r, func(bytes []byte, level uint) error {
 		// Map level to a smaller range for wider fan-out
 		// (more children per tree node).
 		return tb.Add(bytes, level/4)

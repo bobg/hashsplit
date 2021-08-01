@@ -1,4 +1,4 @@
-module github.com/bobg/hashsplit
+module github.com/bobg/hashsplit/v2
 
 go 1.14
 
