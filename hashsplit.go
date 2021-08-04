@@ -195,13 +195,16 @@ type TreeBuilderNode struct {
 	size, offset uint64
 }
 
-// Offset implements Node.Offset.
+// Offset implements Node.Offset,
+// the position of the first byte of the underlying input represented by this node.
 func (n *TreeBuilderNode) Offset() uint64 { return n.offset }
 
-// Size implements Node.Size.
+// Size implements Node.Size,
+// the number of bytes of the underlying input represented by this node.
 func (n *TreeBuilderNode) Size() uint64 { return n.size }
 
-// NumChildren implements Node.NumChildren.
+// NumChildren implements Node.NumChildren,
+// the number of child nodes.
 func (n *TreeBuilderNode) NumChildren() int { return len(n.Nodes) }
 
 // Child implements Node.Child.
@@ -361,6 +364,7 @@ func (tb *TreeBuilder) Root() (Node, error) {
 	return root, nil
 }
 
+// ErrNotFound is the error returned by Seek when the seek position lies outside the given node's range.
 var ErrNotFound = errors.New("not found")
 
 // Seek finds the level-0 node representing the given byte position
