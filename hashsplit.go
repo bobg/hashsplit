@@ -2,6 +2,7 @@
 package hashsplit
 
 import (
+	"errors"
 	"io"
 	"math/bits"
 
@@ -172,7 +173,7 @@ type Node interface {
 	NumChildren() int
 
 	// Child returns the subnode with the given index from 0 through NumChildren()-1.
-	Child(int) Node
+	Child(int) (Node, error)
 }
 
 // TreeBuilderNode is the concrete type implementing the Node interface that is used internally by TreeBuilder.
@@ -195,16 +196,16 @@ type TreeBuilderNode struct {
 }
 
 // Offset implements Node.Offset.
-func (n *TreeBuilderNode) Offset() uint64   { return n.offset }
+func (n *TreeBuilderNode) Offset() uint64 { return n.offset }
 
 // Size implements Node.Size.
-func (n *TreeBuilderNode) Size() uint64     { return n.size }
+func (n *TreeBuilderNode) Size() uint64 { return n.size }
 
 // NumChildren implements Node.NumChildren.
 func (n *TreeBuilderNode) NumChildren() int { return len(n.Nodes) }
 
 // Child implements Node.Child.
-func (n *TreeBuilderNode) Child(i int) Node { return n.Nodes[i] }
+func (n *TreeBuilderNode) Child(i int) (Node, error) { return n.Nodes[i], nil }
 
 // TreeBuilder assembles a sequence of chunks into a hashsplit tree.
 //
@@ -346,33 +347,47 @@ func (tb *TreeBuilder) Root() (Node, error) {
 		return top, nil
 	}
 
-	var root Node = top
+	var (
+		root Node = top
+		err  error
+	)
 	for root.NumChildren() == 1 {
-		root = root.Child(0)
+		root, err = root.Child(0)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return root, nil
 }
 
+var ErrNotFound = errors.New("not found")
+
 // Seek finds the level-0 node representing the given byte position
 // (i.e., the one where Offset <= pos < Offset+Size).
-func Seek(n Node, pos uint64) Node {
+func Seek(n Node, pos uint64) (Node, error) {
 	if pos < n.Offset() || pos >= (n.Offset()+n.Size()) {
-		return nil
+		return nil, ErrNotFound
 	}
 
 	num := n.NumChildren()
 	if num == 0 {
-		return n
+		return n, nil
 	}
 
+	// TODO: if a Node kept track of its children's offsets,
+	// this loop could be replaced with a sort.Search call.
 	for i := 0; i < num; i++ {
-		child := n.Child(i)
-		if n := Seek(child, pos); n != nil {
-			return n
+		child, err := n.Child(i)
+		if err != nil {
+			return nil, err
 		}
+		if pos >= (child.Offset() + child.Size()) {
+			continue
+		}
+		return Seek(child, pos)
 	}
 
 	// With a properly formed tree of nodes this will not be reached.
-	return nil
+	return nil, ErrNotFound
 }

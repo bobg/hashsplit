@@ -91,19 +91,41 @@ func TestSeek(t *testing.T) {
 	root := buildTree(t, text)
 
 	cases := []struct {
-		name string
-		pos  uint64
-		want *TreeBuilderNode
-	}{
-		{"left end", 0, &TreeBuilderNode{Chunks: [][]byte{nil, nil}, size: 35796}},
-		{"right end", 31483 + 116651 - 1, &TreeBuilderNode{Chunks: [][]byte{nil, nil, nil}, size: 31483, offset: 116651}},
-		{"past the end", 31483 + 116651, nil},
-		{"in the middle", 100000, &TreeBuilderNode{Chunks: [][]byte{nil}, size: 6775, offset: 98993}},
-	}
+		name    string
+		pos     uint64
+		want    *TreeBuilderNode
+		wanterr bool
+	}{{
+		name: "left end",
+		pos:  0,
+		want: &TreeBuilderNode{Chunks: [][]byte{nil, nil}, size: 35796},
+	}, {
+		name: "right end",
+		pos:  31483 + 116651 - 1,
+		want: &TreeBuilderNode{Chunks: [][]byte{nil, nil, nil}, size: 31483, offset: 116651},
+	}, {
+		name:    "past the end",
+		pos:     31483 + 116651,
+		want:    nil,
+		wanterr: true,
+	}, {
+		name: "in the middle",
+		pos:  100000,
+		want: &TreeBuilderNode{Chunks: [][]byte{nil}, size: 6775, offset: 98993},
+	}}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := Seek(root, c.pos)
+			got, err := Seek(root, c.pos)
+			if c.wanterr {
+				if err == nil {
+					t.Error("wanted an error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
 			var gottb *TreeBuilderNode
 			if got != nil {
 				gottb = got.(*TreeBuilderNode)
