@@ -3,7 +3,7 @@ package hashsplit_test
 import (
 	"io"
 
-	"github.com/bobg/hashsplit/v2"
+	"github.com/bobg/hashsplit"
 )
 
 func ExampleTreeBuilder() {
