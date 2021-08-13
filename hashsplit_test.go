@@ -43,6 +43,25 @@ func TestSplit(t *testing.T) {
 	}
 }
 
+func TestSplitFew(t *testing.T) {
+	for num := 0; num < 2; num++ {
+		var (
+			inp = make([]byte, num)
+			got []byte
+		)
+		err := Split(bytes.NewReader(inp), func(chunk []byte, level uint) error {
+			got = append(got, chunk...)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != num {
+			t.Errorf("got %d byte(s), want %d", len(got), num)
+		}
+	}
+}
+
 func TestTree(t *testing.T) {
 	text, err := ioutil.ReadFile("testdata/commonsense.txt")
 	if err != nil {
@@ -135,6 +154,66 @@ func TestSeek(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTreeTransform(t *testing.T) {
+	text, err := ioutil.ReadFile("testdata/commonsense.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tb := TreeBuilder{
+		F: func(n *TreeBuilderNode) (Node, error) {
+			return &testNode{nodes: n.Nodes, chunks: n.Chunks, size: n.size, offset: n.offset}, nil
+		},
+	}
+
+	err = Split(bytes.NewReader(text), tb.Add)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	root, err := tb.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got bytes.Buffer
+	err = root.(*testNode).writeto(&got)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(got.Bytes(), text) {
+		t.Error("mismatch")
+	}
+}
+
+type testNode struct {
+	nodes        []Node
+	chunks       [][]byte
+	size, offset uint64
+}
+
+func (n *testNode) Offset() uint64              { return n.offset }
+func (n *testNode) Size() uint64                { return n.size }
+func (n *testNode) NumChildren() int            { return len(n.nodes) }
+func (n *testNode) Child(idx int) (Node, error) { return n.nodes[idx], nil }
+
+func (n *testNode) writeto(w io.Writer) error {
+	for _, subnode := range n.nodes {
+		err := subnode.(*testNode).writeto(w)
+		if err != nil {
+			return err
+		}
+	}
+	for _, chunk := range n.chunks {
+		_, err := w.Write(chunk)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func BenchmarkTree(b *testing.B) {

@@ -10,6 +10,31 @@ As the Splitter reads the stream it maintains a _rolling checksum_ of the last s
 A chunk boundary occurs when the rolling checksum has enough trailing bits set
 (where “enough” is a configurable setting that determines the average chunk size).
 
+## Usage
+
+You can split the input from `r`,
+an `io.Reader`,
+like this:
+
+```go
+err := Split(r, f)
+```
+
+...where `f` is a `func([]byte, uint) error` that receives each consecutive chunk and its “level”
+(which can be thought of as how badly the splitter wanted to make a boundary at the end of the chunk).
+These chunks can be arranged in a “hashsplit tree” like this:
+
+```go
+var tb TreeBuilder
+err := Split(r, tb.Add)
+if err != nil { ... }
+root, err := tb.Root()
+```
+
+...and now `root` is the root of a tree whose leaves contain consecutive chunks of the input.
+
+## What is it all about?
+
 Hashsplitting has benefits when it comes to representing multiple,
 slightly different versions of the same data.
 Consider, for example, the problem of adding EXIF tags to a JPEG image file.
@@ -39,7 +64,9 @@ and a proposed standard,
 can be found at
 [github.com/hashsplit/hashsplit-spec](https://github.com/hashsplit/hashsplit-spec).
 
-Note: an earlier version of this package included a Splitter.Split method,
+## Compatibility note
+
+An earlier version of this package included a Splitter.Split method,
 which allowed a Splitter `s` to consume all of the input from an io.Reader `r`.
 This has been removed.
 The same behavior can be obtained simply by doing:
