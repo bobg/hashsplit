@@ -1,0 +1,3 @@
+[submodule "testdata/test-suite"]
+	path = testdata/test-suite
+	url = https://github.com/hashsplit/test-suite
