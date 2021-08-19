@@ -95,7 +95,7 @@ func Split(r io.Reader, f func([]byte, uint) error) error {
 // Do not forget to call Close on the Splitter
 // to flush any remaining chunk from its internal buffer.
 func NewSplitter(f func([]byte, uint) error) *Splitter {
-	rs := buzhash32.New()
+	rs := buzhash32.NewFromUint32Array(cp32G)
 	var zeroes [windowSize]byte
 	rs.Write(zeroes[:]) // initialize the rolling checksum window
 
