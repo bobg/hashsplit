@@ -3,6 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/bobg/hashsplit.svg)](https://pkg.go.dev/github.com/bobg/hashsplit)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bobg/hashsplit)](https://goreportcard.com/report/github.com/bobg/hashsplit)
 ![Tests](https://github.com/bobg/hashsplit/actions/workflows/go.yml/badge.svg)
+[![Coverage Status](https://coveralls.io/repos/github/bobg/hashsplit/badge.svg?branch=master)](https://coveralls.io/github/bobg/hashsplit?branch=master)
 
 Hashsplitting is a way of dividing a byte stream into pieces
 based on the stream's content rather than on any predetermined chunk size.
