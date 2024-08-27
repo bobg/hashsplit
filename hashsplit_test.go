@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"testing"
 )
@@ -18,22 +17,18 @@ func TestSplit(t *testing.T) {
 	defer f.Close()
 
 	var i int
-	err = Split(f, func(chunk []byte, level uint) error {
+	split, errptr := Split(f)
+	for chunk := range split {
 		i++
-		if true {
-			return ioutil.WriteFile(fmt.Sprintf("testdata/chunk%02d", i), chunk, 0644)
-		}
-
-		want, err := ioutil.ReadFile(fmt.Sprintf("testdata/chunk%02d", i))
+		want, err := os.ReadFile(fmt.Sprintf("testdata/chunk%02d", i))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !bytes.Equal(chunk, want) {
 			t.Errorf("mismatch in chunk %d", i)
 		}
-		return nil
-	})
-	if err != nil {
+	}
+	if err := *errptr; err != nil {
 		t.Fatal(err)
 	}
 
@@ -49,11 +44,12 @@ func TestSplitFew(t *testing.T) {
 			inp = make([]byte, num)
 			got []byte
 		)
-		err := Split(bytes.NewReader(inp), func(chunk []byte, level uint) error {
+
+		split, errptr := Split(bytes.NewReader(inp))
+		for chunk := range split {
 			got = append(got, chunk...)
-			return nil
-		})
-		if err != nil {
+		}
+		if err := *errptr; err != nil {
 			t.Fatal(err)
 		}
 		if len(got) != num {
@@ -63,7 +59,7 @@ func TestSplitFew(t *testing.T) {
 }
 
 func TestTree(t *testing.T) {
-	text, err := ioutil.ReadFile("testdata/commonsense.txt")
+	text, err := os.ReadFile("testdata/commonsense.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +88,7 @@ func TestTree(t *testing.T) {
 		walk(root)
 	}()
 
-	reassembled, err := ioutil.ReadAll(pr)
+	reassembled, err := io.ReadAll(pr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +98,7 @@ func TestTree(t *testing.T) {
 }
 
 func TestSeek(t *testing.T) {
-	text, err := ioutil.ReadFile("testdata/commonsense.txt")
+	text, err := os.ReadFile("testdata/commonsense.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +153,7 @@ func TestSeek(t *testing.T) {
 }
 
 func TestTreeTransform(t *testing.T) {
-	text, err := ioutil.ReadFile("testdata/commonsense.txt")
+	text, err := os.ReadFile("testdata/commonsense.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,8 +164,13 @@ func TestTreeTransform(t *testing.T) {
 		},
 	}
 
-	err = Split(bytes.NewReader(text), tb.Add)
-	if err != nil {
+	split, errptr := Split(bytes.NewReader(text))
+	for chunk, level := range split {
+		if err := tb.Add(chunk, level); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := *errptr; err != nil {
 		t.Fatal(err)
 	}
 
@@ -217,7 +218,7 @@ func (n *testNode) writeto(w io.Writer) error {
 }
 
 func BenchmarkTree(b *testing.B) {
-	text, err := ioutil.ReadFile("testdata/commonsense.txt")
+	text, err := os.ReadFile("testdata/commonsense.txt")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -235,16 +236,14 @@ type fataler interface {
 
 func buildTree(f fataler, text []byte) *TreeBuilderNode {
 	var tb TreeBuilder
-	s := NewSplitter(func(chunk []byte, level uint) error {
-		tb.Add(chunk, level)
-		return nil
-	})
-	_, err := s.Write(text)
-	if err != nil {
-		f.Fatal(err)
+	s := NewSplitter()
+	split, errptr := s.Split(bytes.NewReader(text))
+	for chunk, level := range split {
+		if err := tb.Add(chunk, level); err != nil {
+			f.Fatal(err)
+		}
 	}
-	err = s.Close()
-	if err != nil {
+	if err := *errptr; err != nil {
 		f.Fatal(err)
 	}
 	root, err := tb.Root()

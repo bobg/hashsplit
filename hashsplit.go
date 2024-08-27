@@ -2,8 +2,10 @@
 package hashsplit
 
 import (
+	"bufio"
 	"errors"
 	"io"
+	"iter"
 	"math/bits"
 
 	"github.com/chmduquesne/rollinghash/buzhash32"
@@ -71,78 +73,65 @@ type Splitter struct {
 	rs *buzhash32.Buzhash32
 }
 
-// Split hashsplits its input using a default Splitter and the given callback to process chunks.
-// See NewSplitter for details about the callback.
-func Split(r io.Reader, f func([]byte, uint) error) error {
-	s := NewSplitter(f)
-	_, err := io.Copy(s, r)
-	if err != nil {
-		return err
-	}
-	return s.Close()
+// Split hashsplits its input using a default Splitter.
+func Split(r io.Reader) (iter.Seq2[[]byte, uint], *error) {
+	s := NewSplitter()
+	return s.Split(r)
 }
 
-// NewSplitter produces a new Splitter with the given callback.
-// The Splitter is an io.WriteCloser.
-// As bytes are written to it,
-// it finds chunk boundaries and calls the callback.
-//
-// The callback receives the bytes of the chunk,
-// and the chunk's "level,"
-// which is the number of extra trailing zeroes in the rolling checksum
-// (in excess of Splitter.SplitBits).
-//
-// Do not forget to call Close on the Splitter
-// to flush any remaining chunk from its internal buffer.
-func NewSplitter(f func([]byte, uint) error) *Splitter {
+func NewSplitter() *Splitter {
 	rs := buzhash32.New()
 	var zeroes [windowSize]byte
 	rs.Write(zeroes[:]) // initialize the rolling checksum window
 
-	return &Splitter{f: f, rs: rs}
+	return &Splitter{rs: rs}
 }
 
-// Write implements io.Writer.
-// It may produce one or more calls to the callback in s,
-// as chunks are discovered.
-// Any error from the callback will cause Write to return early with that error.
-func (s *Splitter) Write(inp []byte) (int, error) {
+func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, uint], *error) {
+	var br io.ByteReader
+	if b, ok := r.(io.ByteReader); ok {
+		br = b
+	} else {
+		br = bufio.NewReader(r)
+	}
+
 	minSize := s.MinSize
 	if minSize <= 0 {
 		minSize = defaultMinSize
 	}
-	for i, c := range inp {
-		s.chunk = append(s.chunk, c)
-		s.rs.Roll(c)
-		if len(s.chunk) < minSize {
-			continue
-		}
-		if level, shouldSplit := s.checkSplit(); shouldSplit {
-			err := s.f(s.chunk, level)
-			if err != nil {
-				return i, err
-			}
-			s.chunk = nil
-		}
-	}
-	return len(inp), nil
-}
 
-// Close implements io.Closer.
-// It is necessary to call Close to flush any buffered chunk remaining.
-// Calling Close may result in a call to the callback in s.
-// It is an error to call Write after a call to Close.
-// Close is idempotent:
-// it can safely be called multiple times without error
-// (and without producing the final chunk multiple times).
-func (s *Splitter) Close() error {
-	if len(s.chunk) == 0 {
-		return nil
+	var err error
+
+	f := func(yield func([]byte, uint) bool) {
+		for {
+			var c byte
+			c, err = br.ReadByte()
+			if errors.Is(err, io.EOF) {
+				err = nil
+				if len(s.chunk) > 0 {
+					level, _ := s.checkSplit()
+					yield(s.chunk, level)
+				}
+				return
+			}
+			if err != nil {
+				return
+			}
+			s.chunk = append(s.chunk, c)
+			s.rs.Roll(c)
+			if len(s.chunk) < minSize {
+				continue
+			}
+			if level, shouldSplit := s.checkSplit(); shouldSplit {
+				if !yield(s.chunk, level) {
+					return
+				}
+				s.chunk = nil
+			}
+		}
 	}
-	level, _ := s.checkSplit()
-	err := s.f(s.chunk, level)
-	s.chunk = nil
-	return err
+
+	return f, &err
 }
 
 func (s *Splitter) checkSplit() (uint, bool) {
