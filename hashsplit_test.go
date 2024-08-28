@@ -73,13 +73,15 @@ func TestTree(t *testing.T) {
 		t.Fatal("tree mismatch")
 	}
 
+	var innerErr error
+
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
 		for chunk := range root.AllChunks() {
-			_, err := pw.Write(chunk)
-			if err != nil {
-				t.Fatal(err)
+			_, innerErr = pw.Write(chunk)
+			if innerErr != nil {
+				return
 			}
 		}
 	}()
@@ -87,6 +89,9 @@ func TestTree(t *testing.T) {
 	reassembled, err := io.ReadAll(pr)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if innerErr != nil {
+		t.Fatal(innerErr)
 	}
 	if !bytes.Equal(text, reassembled) {
 		t.Error("reassembled text does not match original")
