@@ -247,12 +247,13 @@ func (s *Splitter) checkSplit() (int, bool) {
 //
 // The chunk levels produced by [Split] result in a tree with an average branching factor of 2
 // (i.e., each node has 2 children on average).
-// You can get more children per node − a.k.a. wider fan-out −
-// by reducing each chunk's level value as seen by Tree.
+// This results in tall trees.
+// If you want a wider tree, with more children per node,
+// you have to narrow the range of chunk levels seen by Tree.
 // Here's how that might look:
 //
 //	split, errptr := hashsplit.Split(input)
-//	reducedLevels := func(yield func([]byte, int) bool) { split(func(chunk []byte, level int) bool { return yield(chunk, level/4) }) }
+//	reducedLevels := seqs.Map2(split, func(chunk []byte, level int) ([]byte, int) { return chunk, level/4 })
 //	tree := hashsplit.Tree(reducedLevels)
 //	var root *hashsplit.TreeNode
 //	for node := range tree {
@@ -261,6 +262,8 @@ func (s *Splitter) checkSplit() (int, bool) {
 //	if err := *errptr; err != nil {
 //	  panic(err)
 //	}
+//
+// (See https://pkg.go.dev/github.com/bobg/seqs#Map2 for an explanation of the Map2 function used here.)
 func Tree(inp iter.Seq2[[]byte, int]) iter.Seq2[*TreeNode, int] {
 	return func(yield func(*TreeNode, int) bool) {
 		levels := []*TreeNode{{}} // One empty level-0 node.
