@@ -3,73 +3,85 @@ package hashsplit_test
 import (
 	"io"
 
+	"github.com/bobg/seqs"
+
 	"github.com/bobg/hashsplit/v2"
 )
 
-func ExampleTreeBuilder() {
+func ExampleTree() {
 	var (
-		r  io.Reader // Represents the source of some data.
-		tb hashsplit.TreeBuilder
+		r    io.Reader // Represents the source of some data.
+		root *hashsplit.TreeNode
 	)
 
 	split, errptr := hashsplit.Split(r)
-	for chunk, level := range split {
-		if err := tb.Add(chunk, level); err != nil {
-			panic(err)
-		}
+	tree := hashsplit.Tree(split)
+	for node := range tree {
+		root = node
 	}
 	if err := *errptr; err != nil {
 		panic(err)
 	}
-	// Get the root of the tree with tb.Root().
+
+	_ = root
+
+	// Now root is the root of the tree.
 }
 
 func ExampleTreeBuilder_saveAside() {
 	var r io.Reader // Represents the source of some data.
 
-	// Represents any function that replaces a chunk with a compact representation of that chunk
-	// (like a hash or a lookup key).
-	var saveAside func([]byte) ([]byte, error)
-
-	tb := hashsplit.TreeBuilder{
-		F: func(node *hashsplit.TreeBuilderNode) (hashsplit.Node, error) {
-			for i, chunk := range node.Chunks {
-				repr, err := saveAside(chunk)
-				if err != nil {
-					return nil, err
-				}
-				node.Chunks[i] = repr
-			}
-			return node, nil
-		},
-	}
-
 	split, errptr := hashsplit.Split(r)
-	for chunk, level := range split {
-		if err := tb.Add(chunk, level); err != nil {
-			panic(err)
+	tree := hashsplit.Tree(split)
+
+	var (
+		// Represents a function that saves a chunk aside and returns a compact representation of it
+		// (like a hash or a lookup key).
+		saveAside func([]byte) ([]byte, error)
+
+		root *hashsplit.TreeNode
+	)
+
+	for node := range tree {
+		for i, chunk := range node.Chunks {
+			saved, err := saveAside(chunk)
+			if err != nil {
+				panic(err)
+			}
+			node.Chunks[i] = saved
 		}
+		root = node
 	}
+
 	if err := *errptr; err != nil {
 		panic(err)
 	}
-	// Get the root of the tree with tb.Root().
+
+	_ = root
+
+	// Now root is the root of the tree.
+	// The chunks in the tree have been replaced by lookup keys or whatever.
 }
 
 func ExampleTreeBuilder_fanOut() {
-	var (
-		r  io.Reader // Represents the source of some data.
-		tb hashsplit.TreeBuilder
-	)
+	var r io.Reader // Represents the source of some data.
 
 	split, errptr := hashsplit.Split(r)
-	for chunk, level := range split {
-		if err := tb.Add(chunk, level/4); err != nil {
-			panic(err)
-		}
+
+	var (
+		reducedLevelSplit = seqs.Map2(split, func(chunk []byte, level int) ([]byte, int) { return chunk, level / 4 })
+		tree              = hashsplit.Tree(reducedLevelSplit)
+		root              *hashsplit.TreeNode
+	)
+	for node := range tree {
+		root = node
 	}
+
 	if err := *errptr; err != nil {
 		panic(err)
 	}
-	// Get the root of the tree with tb.Root().
+
+	_ = root
+
+	// Now root is the root of the tree, with a wider fanout.
 }

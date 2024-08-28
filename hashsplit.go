@@ -17,8 +17,7 @@ const (
 	defaultMinSize   = windowSize
 )
 
-// Splitter hashsplits a byte sequence into chunks.
-// It implements the io.WriteCloser interface.
+// Splitter hashsplits a byte stream into chunks.
 // Create a new Splitter with NewSplitter.
 //
 // Hashsplitting is a way of dividing a byte stream into pieces
@@ -59,10 +58,7 @@ type Splitter struct {
 	// (But thanks to math, that doesn't mean that 8,192 is the median chunk size.
 	// The median chunk size is actually the logarithm, base (2^SplitBits-1)/(2^SplitBits), of 0.5.
 	// That makes the median chunk size 5,678 when SplitBits==13.)
-	SplitBits uint
-
-	// The function to invoke on each chunk produced.
-	f func([]byte, uint) error
+	SplitBits int
 
 	// The chunk being built.
 	chunk []byte
@@ -74,7 +70,7 @@ type Splitter struct {
 }
 
 // Split hashsplits its input using a default Splitter.
-func Split(r io.Reader) (iter.Seq2[[]byte, uint], *error) {
+func Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 	s := NewSplitter()
 	return s.Split(r)
 }
@@ -87,7 +83,7 @@ func NewSplitter() *Splitter {
 	return &Splitter{rs: rs}
 }
 
-func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, uint], *error) {
+func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 	var br io.ByteReader
 	if b, ok := r.(io.ByteReader); ok {
 		br = b
@@ -102,7 +98,7 @@ func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, uint], *error) {
 
 	var err error
 
-	f := func(yield func([]byte, uint) bool) {
+	f := func(yield func([]byte, int) bool) {
 		for {
 			var c byte
 			c, err = br.ReadByte()
@@ -134,72 +130,23 @@ func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, uint], *error) {
 	return f, &err
 }
 
-func (s *Splitter) checkSplit() (uint, bool) {
+func (s *Splitter) checkSplit() (int, bool) {
 	splitBits := s.SplitBits
 	if splitBits == 0 {
 		splitBits = defaultSplitBits
 	}
 	h := s.rs.Sum32()
-	tz := uint(bits.TrailingZeros32(h))
+	tz := bits.TrailingZeros32(h)
 	if tz >= splitBits {
 		return tz - splitBits, true
 	}
 	return 0, false
 }
 
-// Node is the abstract type of a node in a hashsplit tree.
-// See TreeBuilder for details.
-type Node interface {
-	// Offset gives the position in the original byte stream that is the first byte represented by this node.
-	Offset() uint64
-
-	// Size gives the number of bytes in the original byte stream that this node represents.
-	Size() uint64
-
-	// NumChildren gives the number of subnodes of this node.
-	// This is only for interior nodes of the tree (level 1 and higher).
-	// For leaf nodes (level 0) this must return zero.
-	NumChildren() int
-
-	// Child returns the subnode with the given index from 0 through NumChildren()-1.
-	Child(int) (Node, error)
-}
-
-// TreeBuilderNode is the concrete type implementing the Node interface that is used internally by TreeBuilder.
-// Callers may transform this into any other node type during tree construction using the TreeBuilder.F callback.
-//
-// A interior node ("level 1" and higher) contains one or more subnodes as children.
-// A leaf node ("level 0") contains one or more byte slices,
-// which are hashsplit chunks of the input.
-// Exactly one of Nodes and Chunks is non-empty.
-type TreeBuilderNode struct {
-	// Nodes is the list of subnodes.
-	// This is empty for leaf nodes (level 0) and non-empty for interior nodes (level 1 and higher).
-	Nodes []Node
-
-	// Chunks is a list of chunks.
-	// This is non-empty for leaf nodes (level 0) and empty for interior nodes (level 1 and higher).
-	Chunks [][]byte
-
-	size, offset uint64
-}
-
-// Offset implements Node.Offset,
-// the position of the first byte of the underlying input represented by this node.
-func (n *TreeBuilderNode) Offset() uint64 { return n.offset }
-
-// Size implements Node.Size,
-// the number of bytes of the underlying input represented by this node.
-func (n *TreeBuilderNode) Size() uint64 { return n.size }
-
-// NumChildren implements Node.NumChildren,
-// the number of child nodes.
-func (n *TreeBuilderNode) NumChildren() int { return len(n.Nodes) }
-
-// Child implements Node.Child.
-func (n *TreeBuilderNode) Child(i int) (Node, error) { return n.Nodes[i], nil }
-
-// TreeBuilder assembles a sequence of chunks into a hashsplit tree.
+// Tree arranges a sequence of chunks produced by a splitter into a "hashsplit tree."
+// The result is an iterator of [TreeNode]/level pairs in a particular order;
+// see details below.
+// The final pair in the sequence is the root of the tree.
 //
 // A hashsplit tree provides another level of space-and-bandwidth savings
 // over and above what Split gives you.
@@ -223,134 +170,82 @@ func (n *TreeBuilderNode) Child(i int) (Node, error) { return n.Nodes[i], nil }
 // Tree nodes at level N>0 collect nodes at level N-1
 // up to and including a chunk at level L>N;
 // then a new level-N node begins.
-type TreeBuilder struct {
-	// F is an optional function for transforming the TreeBuilder's node representation
-	// (*TreeBuilderNode)
-	// into any other type implementing the Node interface.
-	// This is called on each node as it is completed and added to its parent as a new child.
-	//
-	// Callers may wish to perform this transformation when it is not necessary or desirable to keep the full input in memory
-	// (i.e., the chunks in the leaf nodes),
-	// such as when the input may be very large.
-	//
-	// F is guaranteed to be called exactly once on each node.
-	//
-	// If F is nil,
-	// all nodes in the tree remain *TreeBuilderNode objects.
-	//
-	// If this callback return an error,
-	// the enclosing function -
-	// Add or Root -
-	// returns early with that error.
-	// In that case the TreeBuilder is left in an inconsistent state
-	// and no further calls to Add or Root are possible.
-	F func(*TreeBuilderNode) (Node, error)
-
-	levels []*TreeBuilderNode
-}
-
-// Add adds a new chunk to the TreeBuilder.
-// It is typical to call this function in the callback of Split as each chunk is produced.
-//
-// The level of a chunk is normally the level value passed to the Split callback.
-// It results in the creation of a new node at the given level.
-// However, this produces a tree with an average branching factor of 2.
-// For wider fan-out (more children per node),
-// the caller can reduce the value of level.
-func (tb *TreeBuilder) Add(bytes []byte, level uint) error {
-	if len(tb.levels) == 0 {
-		tb.levels = []*TreeBuilderNode{new(TreeBuilderNode)}
-	}
-	tb.levels[0].Chunks = append(tb.levels[0].Chunks, bytes)
-	for _, n := range tb.levels {
-		n.size += uint64(len(bytes))
-	}
-	for i := uint(0); i < level; i++ {
-		if i == uint(len(tb.levels))-1 {
-			tb.levels = append(tb.levels, &TreeBuilderNode{
-				size: tb.levels[i].size,
-			})
-		}
-		var n Node = tb.levels[i]
-		if tb.F != nil {
-			var err error
-			n, err = tb.F(tb.levels[i])
-			if err != nil {
-				return err
+func Tree(inp iter.Seq2[[]byte, int]) iter.Seq2[*TreeNode, int] {
+	return func(yield func(*TreeNode, int) bool) {
+		levels := []*TreeNode{{}} // One empty level-0 node.
+		for chunk, level := range inp {
+			levels[0].Chunks = append(levels[0].Chunks, chunk)
+			for _, n := range levels {
+				n.Size += uint64(len(chunk))
 			}
-		}
-		tb.levels[i+1].Nodes = append(tb.levels[i+1].Nodes, n)
-		tb.levels[i] = &TreeBuilderNode{
-			offset: tb.levels[i+1].offset + tb.levels[i+1].size,
-		}
-	}
-	return nil
-}
+			for i := 0; i < level; i++ {
+				if i == len(levels)-1 {
+					levels = append(levels, &TreeNode{
+						Size: levels[i].Size,
+					})
+				}
 
-// Root produces the root of the tree after all nodes have been added with calls to Add.
-// Root may only be called one time.
-// If the tree is empty,
-// Root returns a nil Node.
-// It is an error to call Add after a call to Root.
-//
-// The return value of Root is the interface type Node.
-// If tb.F is nil, the concrete type will be *TreeBuilderNode.
-func (tb *TreeBuilder) Root() (Node, error) {
-	if len(tb.levels) == 0 {
-		return nil, nil
-	}
+				n := levels[i]
+				levels[i+1].Children = append(levels[i+1].Children, n)
 
-	if len(tb.levels[0].Chunks) > 0 {
-		for i := 0; i < len(tb.levels)-1; i++ {
-			var n Node = tb.levels[i]
-			if tb.F != nil {
-				var err error
-				n, err = tb.F(tb.levels[i])
-				if err != nil {
-					return nil, err
+				if !yield(n, i) {
+					return
+				}
+
+				levels[i] = &TreeNode{
+					Offset: levels[i+1].Offset + levels[i+1].Size,
 				}
 			}
-			tb.levels[i+1].Nodes = append(tb.levels[i+1].Nodes, n)
-			tb.levels[i] = nil // help the gc reclaim memory sooner, maybe
+		}
+
+		if len(levels[0].Chunks) > 0 {
+			for i := 0; i < len(levels)-1; i++ {
+				levels[i+1].Children = append(levels[i+1].Children, levels[i])
+			}
+		}
+
+		if len(levels) == 1 {
+			yield(levels[0], 0)
+			return
+		}
+
+		top := len(levels) - 1
+		for top > 0 && len(levels[top].Children) == 1 {
+			top--
+		}
+		for i := 0; i <= top; i++ {
+			if !yield(levels[i], i) {
+				return
+			}
 		}
 	}
+}
 
-	// Don't necessarily return the highest node in tb.levels.
-	// We can prune any would-be root nodes that have only one child.
+type TreeNode struct {
+	// Offset is the position in the original byte stream
+	Offset   uint64
+	Size     uint64
+	Children []*TreeNode
+	Chunks   [][]byte
+}
 
-	// If we _are_ going to return tb.levels[len(tb.levels)-1],
-	// we have to call tb.F on it.
-	// If we're not, we don't:
-	// tb.F has already been called on all other nodes.
-
-	if len(tb.levels) == 1 {
-		var result Node = tb.levels[0]
-		if tb.F != nil {
-			return tb.F(tb.levels[0])
+// AllChunks produces an iterator over all the chunks in the tree.
+// It does this with a recursive tree walk starting at n.
+func (n *TreeNode) AllChunks() iter.Seq[[]byte] {
+	return func(yield func([]byte) bool) {
+		for _, chunk := range n.Chunks {
+			if !yield(chunk) {
+				return
+			}
 		}
-		return result, nil
-	}
-
-	top := tb.levels[len(tb.levels)-1]
-	if len(top.Nodes) > 1 {
-		if tb.F != nil {
-			return tb.F(top)
-		}
-		return top, nil
-	}
-
-	var (
-		root Node = top
-		err  error
-	)
-	for root.NumChildren() == 1 {
-		root, err = root.Child(0)
-		if err != nil {
-			return nil, err
+		for _, child := range n.Children {
+			for chunk := range child.AllChunks() {
+				if !yield(chunk) {
+					return
+				}
+			}
 		}
 	}
-
-	return root, nil
 }
 
 // ErrNotFound is the error returned by Seek when the seek position lies outside the given node's range.
@@ -358,24 +253,20 @@ var ErrNotFound = errors.New("not found")
 
 // Seek finds the level-0 node representing the given byte position
 // (i.e., the one where Offset <= pos < Offset+Size).
-func Seek(n Node, pos uint64) (Node, error) {
-	if pos < n.Offset() || pos >= (n.Offset()+n.Size()) {
+func Seek(n *TreeNode, pos uint64) (*TreeNode, error) {
+	if pos < n.Offset || pos >= (n.Offset+n.Size) {
 		return nil, ErrNotFound
 	}
 
-	num := n.NumChildren()
+	num := len(n.Children)
 	if num == 0 {
 		return n, nil
 	}
 
 	// TODO: if a Node kept track of its children's offsets,
 	// this loop could be replaced with a sort.Search call.
-	for i := 0; i < num; i++ {
-		child, err := n.Child(i)
-		if err != nil {
-			return nil, err
-		}
-		if pos >= (child.Offset() + child.Size()) {
+	for _, child := range n.Children {
+		if pos >= (child.Offset + child.Size) {
 			continue
 		}
 		return Seek(child, pos)

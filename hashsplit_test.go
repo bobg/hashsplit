@@ -73,19 +73,12 @@ func TestTree(t *testing.T) {
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		var walk func(node *TreeBuilderNode)
-		walk = func(node *TreeBuilderNode) {
-			if len(node.Nodes) > 0 {
-				for _, child := range node.Nodes {
-					walk(child.(*TreeBuilderNode))
-				}
-			} else {
-				for _, chunk := range node.Chunks {
-					pw.Write(chunk)
-				}
+		for chunk := range root.AllChunks() {
+			_, err := pw.Write(chunk)
+			if err != nil {
+				t.Fatal(err)
 			}
 		}
-		walk(root)
 	}()
 
 	reassembled, err := io.ReadAll(pr)
@@ -108,16 +101,16 @@ func TestSeek(t *testing.T) {
 	cases := []struct {
 		name    string
 		pos     uint64
-		want    *TreeBuilderNode
+		want    *TreeNode
 		wanterr bool
 	}{{
 		name: "left end",
 		pos:  0,
-		want: &TreeBuilderNode{Chunks: [][]byte{nil, nil}, size: 35796},
+		want: &TreeNode{Chunks: [][]byte{nil, nil}, Size: 35796},
 	}, {
 		name: "right end",
 		pos:  31483 + 116651 - 1,
-		want: &TreeBuilderNode{Chunks: [][]byte{nil, nil, nil}, size: 31483, offset: 116651},
+		want: &TreeNode{Chunks: [][]byte{nil, nil, nil}, Size: 31483, Offset: 116651},
 	}, {
 		name:    "past the end",
 		pos:     31483 + 116651,
@@ -126,7 +119,7 @@ func TestSeek(t *testing.T) {
 	}, {
 		name: "in the middle",
 		pos:  100000,
-		want: &TreeBuilderNode{Chunks: [][]byte{nil}, size: 6775, offset: 98993},
+		want: &TreeNode{Chunks: [][]byte{nil}, Size: 6775, Offset: 98993},
 	}}
 
 	for _, c := range cases {
@@ -141,80 +134,11 @@ func TestSeek(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var gottb *TreeBuilderNode
-			if got != nil {
-				gottb = got.(*TreeBuilderNode)
-			}
-			if !compareTrees(gottb, c.want) {
-				t.Errorf("got %+v, want %+v", gottb, c.want)
+			if !compareTrees(got, c.want) {
+				t.Errorf("got %+v, want %+v", got, c.want)
 			}
 		})
 	}
-}
-
-func TestTreeTransform(t *testing.T) {
-	text, err := os.ReadFile("testdata/commonsense.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tb := TreeBuilder{
-		F: func(n *TreeBuilderNode) (Node, error) {
-			return &testNode{nodes: n.Nodes, chunks: n.Chunks, size: n.size, offset: n.offset}, nil
-		},
-	}
-
-	split, errptr := Split(bytes.NewReader(text))
-	for chunk, level := range split {
-		if err := tb.Add(chunk, level); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := *errptr; err != nil {
-		t.Fatal(err)
-	}
-
-	root, err := tb.Root()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var got bytes.Buffer
-	err = root.(*testNode).writeto(&got)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !bytes.Equal(got.Bytes(), text) {
-		t.Error("mismatch")
-	}
-}
-
-type testNode struct {
-	nodes        []Node
-	chunks       [][]byte
-	size, offset uint64
-}
-
-func (n *testNode) Offset() uint64              { return n.offset }
-func (n *testNode) Size() uint64                { return n.size }
-func (n *testNode) NumChildren() int            { return len(n.nodes) }
-func (n *testNode) Child(idx int) (Node, error) { return n.nodes[idx], nil }
-
-func (n *testNode) writeto(w io.Writer) error {
-	for _, subnode := range n.nodes {
-		err := subnode.(*testNode).writeto(w)
-		if err != nil {
-			return err
-		}
-	}
-	for _, chunk := range n.chunks {
-		_, err := w.Write(chunk)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func BenchmarkTree(b *testing.B) {
@@ -234,48 +158,42 @@ type fataler interface {
 	Fatal(...interface{})
 }
 
-func buildTree(f fataler, text []byte) *TreeBuilderNode {
-	var tb TreeBuilder
-	s := NewSplitter()
-	split, errptr := s.Split(bytes.NewReader(text))
-	for chunk, level := range split {
-		if err := tb.Add(chunk, level); err != nil {
-			f.Fatal(err)
-		}
+func buildTree(f fataler, text []byte) *TreeNode {
+	split, errptr := Split(bytes.NewReader(text))
+	tree := Tree(split)
+	var root *TreeNode
+	for node := range tree {
+		root = node
 	}
 	if err := *errptr; err != nil {
 		f.Fatal(err)
 	}
-	root, err := tb.Root()
-	if err != nil {
-		f.Fatal(err)
-	}
-	return root.(*TreeBuilderNode)
+	return root
 }
 
 // Compares two trees, disregarding the contents of the leaves.
-func compareTrees(a, b *TreeBuilderNode) bool {
+func compareTrees(a, b *TreeNode) bool {
 	if a == nil {
 		return b == nil
 	}
 	if b == nil {
 		return false
 	}
-	if len(a.Nodes) != len(b.Nodes) {
+	if len(a.Children) != len(b.Children) {
 		return false
 	}
 	if len(a.Chunks) != len(b.Chunks) {
 		return false
 	}
-	if a.size != b.size {
+	if a.Size != b.Size {
 		return false
 	}
-	if a.offset != b.offset {
+	if a.Offset != b.Offset {
 		return false
 	}
 
-	for i := 0; i < len(a.Nodes); i++ {
-		if !compareTrees(a.Nodes[i].(*TreeBuilderNode), b.Nodes[i].(*TreeBuilderNode)) {
+	for i := 0; i < len(a.Children); i++ {
+		if !compareTrees(a.Children[i], b.Children[i]) {
 			return false
 		}
 	}
@@ -283,44 +201,16 @@ func compareTrees(a, b *TreeBuilderNode) bool {
 	return true
 }
 
-type jsonTBNode struct {
-	Nodes        []*jsonTBNode
-	Chunks       [][]byte
-	Size, Offset uint64
-}
-
-func (j jsonTBNode) toTBNode() *TreeBuilderNode {
-	result := &TreeBuilderNode{
-		Chunks: j.Chunks,
-		size:   j.Size,
-		offset: j.Offset,
-	}
-	for _, n := range j.Nodes {
-		result.Nodes = append(result.Nodes, n.toTBNode())
-	}
-	return result
-}
-
-func (n *TreeBuilderNode) UnmarshalJSON(inp []byte) error {
-	var j jsonTBNode
-	err := json.Unmarshal(inp, &j)
-	if err != nil {
-		return err
-	}
-	*n = *(j.toTBNode())
-	return nil
-}
-
 // The shape, but not the leaf content, of the expected tree.
 const wantTreeJSON = `
 {
-  "Nodes": [
+  "Children": [
     {
-      "Nodes": [
+      "Children": [
         {
-          "Nodes": [
+          "Children": [
             {
-              "Nodes": [
+              "Children": [
                 {
                   "Chunks": ["", ""],
                   "Size": 35796,
@@ -335,9 +225,9 @@ const wantTreeJSON = `
           "Offset": 0
         },
         {
-          "Nodes": [
+          "Children": [
             {
-              "Nodes": [
+              "Children": [
                 {
                   "Chunks": ["", "", ""],
                   "Size": 38104,
@@ -352,9 +242,9 @@ const wantTreeJSON = `
           "Offset": 35796
         },
         {
-          "Nodes": [
+          "Children": [
             {
-              "Nodes": [
+              "Children": [
                 {
                   "Chunks": ["", ""],
                   "Size": 24177,
@@ -373,11 +263,11 @@ const wantTreeJSON = `
       "Offset": 0
     },
     {
-      "Nodes": [
+      "Children": [
         {
-          "Nodes": [
+          "Children": [
             {
-              "Nodes": [
+              "Children": [
                 {
                   "Chunks": [""],
                   "Size": 916,
@@ -388,7 +278,7 @@ const wantTreeJSON = `
               "Offset": 98077
             },
             {
-              "Nodes": [
+              "Children": [
                 {
                   "Chunks": [""],
                   "Size": 6775,
@@ -399,7 +289,7 @@ const wantTreeJSON = `
               "Offset": 98993
             },
             {
-              "Nodes": [
+              "Children": [
                 {
                   "Chunks": [""],
                   "Size": 557,
@@ -432,10 +322,10 @@ const wantTreeJSON = `
   "Offset": 0
 }`
 
-var wantTree *TreeBuilderNode
+var wantTree *TreeNode
 
 func init() {
-	var w TreeBuilderNode
+	var w TreeNode
 	err := json.Unmarshal([]byte(wantTreeJSON), &w)
 	if err != nil {
 		panic(err)
