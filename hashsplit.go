@@ -70,11 +70,14 @@ type Splitter struct {
 }
 
 // Split hashsplits its input using a default Splitter.
+// See [Splitter.Split].
 func Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 	s := NewSplitter()
 	return s.Split(r)
 }
 
+// NewSplitter produces a new Splitter.
+// It may be customized before use by setting its MinSize and SplitBits fields.
 func NewSplitter() *Splitter {
 	rs := buzhash32.New()
 	var zeroes [windowSize]byte
@@ -83,6 +86,22 @@ func NewSplitter() *Splitter {
 	return &Splitter{rs: rs}
 }
 
+// Split consumes the given input stream and hashsplits it, producing an iterator of chunk/level pairs.
+//
+// Each chunk is a subsequence of the input stream.
+// Concatenating the chunks in order produces the original stream.
+//
+// A chunk's "level" is a number that indicates how many trailing zero bits the chunk's hash has,
+// in excess of the number required to split the chunk
+// (as determined by the Splitter's SplitBits setting).
+// You can think of this as a measure of how badly the Splitter wanted to put a chunk boundary here.
+// This number is used in constructing a hashsplit tree; see [Tree].
+//
+// After consuming the returned iterator,
+// the caller should dereference the returned error pointer
+// to see if any call to the underlying reader produced an error.
+//
+// The Splitter should not be reused for another stream after this call.
 func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 	var br io.ByteReader
 	if b, ok := r.(io.ByteReader); ok {
@@ -144,7 +163,7 @@ func (s *Splitter) checkSplit() (int, bool) {
 }
 
 // Tree arranges a sequence of chunks produced by a splitter into a "hashsplit tree."
-// The result is an iterator of [TreeNode]/level pairs in a particular order;
+// The result is an iterator of TreeNode/level pairs in a particular order;
 // see details below.
 // The final pair in the sequence is the root of the tree.
 //
@@ -162,7 +181,7 @@ func (s *Splitter) checkSplit() (int, bool) {
 // Most subtrees will remain the same.
 //
 // Just as each chunk has a level L determined by the rolling checksum
-// (see NewSplitter),
+// (see [Splitter.Split]),
 // so does each node in the tree have a level, N.
 // Tree nodes at level 0 collect chunks at level 0,
 // up to and including a chunk at level L>0;
@@ -170,6 +189,78 @@ func (s *Splitter) checkSplit() (int, bool) {
 // Tree nodes at level N>0 collect nodes at level N-1
 // up to and including a chunk at level L>N;
 // then a new level-N node begins.
+//
+// # ITERATOR DETAILS
+//
+// Each time Tree consumes a chunk at level L>0,
+// it yields the nodes in the partially constructed tree
+// that were previously pending,
+// from levels 0 through L-1.
+//
+// After the final chunk is consumed,
+// Tree yields the remaining nodes pending, from level 0 up to the root.
+//
+// For example, Tree may produce a sequence of nodes at these levels:
+//
+//	0, 1, 0, 1, 2, 0, 1, 0, 1, 2, 3
+//
+// The level-3 node at the end is the root of the tree.
+//
+// Callers may discard all but the last node.
+// The rest of the tree,
+// and the chunks at the leaves,
+// are reachable from the root via the Children and Chunks fields.
+//
+// # TRANSFORMING NODES
+//
+// The caller may transform nodes as they are produced by the iterator.
+// For example, if the input is very large,
+// it may not be desirable to keep all the chunks in memory
+// (in the leaves of the tree).
+// Instead, it might be preferable to "save them aside" to external storage
+// and replace them in the tree with some compact representation,
+// like a hash or a lookup key.
+// Here's how this might be done:
+//
+//	split, errptr := Split(input)
+//	tree := Tree(split)
+//	var root *TreeNode
+//	for node := range tree {
+//	  for i, chunk := range node.Chunks {
+//	    saved, err := saveAside(chunk)
+//	    if err != nil {
+//	      panic(err)
+//	    }
+//	    node.Chunks[i] = saved
+//	  }
+//	  root = node
+//	}
+//	if err := *errptr; err != nil {
+//	  panic(err)
+//	}
+//
+// After this, root is the root of the tree,
+// and the leaves no longer have the original input chunks,
+// but instead have their saved-aside representations.
+//
+// # FAN-OUT
+//
+// The chunk levels produced by [Split] result in a tree with an average branching factor of 2
+// (i.e., each node has 2 children on average).
+// You can get more children per node − a.k.a. wider fan-out −
+// by reducing each chunk's level value as seen by Tree.
+// Here's how that might look:
+//
+//	split, errptr := Split(input)
+//	reducedLevels := func(yield func([]byte, int) bool) { split(func(chunk []byte, level int) bool { return yield(chunk, level/4) }) }
+//	tree := Tree(reducedLevels)
+//	var root *TreeNode
+//	for node := range tree {
+//	  root = node
+//	}
+//	if err := *errptr; err != nil {
+//	  panic(err)
+//	}
 func Tree(inp iter.Seq2[[]byte, int]) iter.Seq2[*TreeNode, int] {
 	return func(yield func(*TreeNode, int) bool) {
 		levels := []*TreeNode{{}} // One empty level-0 node.
@@ -198,15 +289,12 @@ func Tree(inp iter.Seq2[[]byte, int]) iter.Seq2[*TreeNode, int] {
 			}
 		}
 
-		if len(levels[0].Chunks) > 0 {
-			for i := 0; i < len(levels)-1; i++ {
-				levels[i+1].Children = append(levels[i+1].Children, levels[i])
-			}
+		if len(levels[0].Chunks) == 0 {
+			return
 		}
 
-		if len(levels) == 1 {
-			yield(levels[0], 0)
-			return
+		for i := 0; i < len(levels)-1; i++ {
+			levels[i+1].Children = append(levels[i+1].Children, levels[i])
 		}
 
 		top := len(levels) - 1
@@ -221,12 +309,18 @@ func Tree(inp iter.Seq2[[]byte, int]) iter.Seq2[*TreeNode, int] {
 	}
 }
 
+// TreeNode is the type of a node in the tree produced by [Tree].
 type TreeNode struct {
-	// Offset is the position in the original byte stream
-	Offset   uint64
-	Size     uint64
+	// Offset and Size describe the range of the original input stream encompassed by this node.
+	Offset, Size uint64
+
+	// Children is the list of subnodes for a node at level N>0.
+	// This list is empty for level 0 nodes.
 	Children []*TreeNode
-	Chunks   [][]byte
+
+	// Chunks is the list of chunks for a node at level 0.
+	// This list is empty for nodes at higher levels.
+	Chunks [][]byte
 }
 
 // AllChunks produces an iterator over all the chunks in the tree.
