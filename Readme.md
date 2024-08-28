@@ -1,14 +1,14 @@
 # Hashsplit - content-based splitting of byte streams
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/bobg/hashsplit.svg)](https://pkg.go.dev/github.com/bobg/hashsplit)
-[![Go Report Card](https://goreportcard.com/badge/github.com/bobg/hashsplit)](https://goreportcard.com/report/github.com/bobg/hashsplit)
-![Tests](https://github.com/bobg/hashsplit/actions/workflows/go.yml/badge.svg)
-[![Coverage Status](https://coveralls.io/repos/github/bobg/hashsplit/badge.svg?branch=master)](https://coveralls.io/github/bobg/hashsplit?branch=master)
+[![Go Reference](https://pkg.go.dev/badge/github.com/bobg/hashsplit.svg)](https://pkg.go.dev/github.com/bobg/hashsplit/v2)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bobg/hashsplit)](https://goreportcard.com/report/github.com/bobg/hashsplit/v2)
+![Tests](https://github.com/bobg/hashsplit/v2/actions/workflows/go.yml/badge.svg)
+[![Coverage Status](https://coveralls.io/repos/github/bobg/hashsplit/badge.svg?branch=master)](https://coveralls.io/github/bobg/hashsplit/v2?branch=master)
 
 Hashsplitting is a way of dividing a byte stream into pieces
 based on the stream's content rather than on any predetermined chunk size.
 As the Splitter reads the stream it maintains a _rolling checksum_ of the last several bytes.
-A chunk boundary occurs when the rolling checksum has enough trailing bits set
+A chunk boundary occurs when the rolling checksum has enough trailing bits set to zero
 (where “enough” is a configurable setting that determines the average chunk size).
 
 ## Usage
@@ -18,18 +18,27 @@ an `io.Reader`,
 like this:
 
 ```go
-err := Split(r, f)
+split, errptr := hashsplit.Split(r)
+for chunk := range split {
+  // ...handle the contents of r one chunk at a time...
+}
+if err := *errptr; err != nil {
+  // ...handle an error reading from r...
+}
 ```
 
-...where `f` is a `func([]byte, uint) error` that receives each consecutive chunk and its “level”
-(which can be thought of as how badly the splitter wanted to make a boundary at the end of the chunk).
-These chunks can be arranged in a “hashsplit tree” like this:
+Chunks can be arranged in a “hashsplit tree” like this:
 
 ```go
-var tb TreeBuilder
-err := Split(r, tb.Add)
-if err != nil { ... }
-root, err := tb.Root()
+split, errptr := hashsplit.Split(r)
+tree := hashsplit.Tree(split)
+var root *hashsplit.TreeNode
+for node := range tree {
+  root = node
+}
+if err := *errptr; err != nil {
+  // ...handle an error reading from r...
+}
 ```
 
 ...and now `root` is the root of a tree whose leaves contain consecutive chunks of the input.
@@ -64,16 +73,3 @@ More information,
 and a proposed standard,
 can be found at
 [github.com/hashsplit/hashsplit-spec](https://github.com/hashsplit/hashsplit-spec).
-
-## Compatibility note
-
-An earlier version of this package included a Splitter.Split method,
-which allowed a Splitter `s` to consume all of the input from an io.Reader `r`.
-This has been removed.
-The same behavior can be obtained simply by doing:
-
-```go
-_, err := io.Copy(s, r)
-if err != nil { ... }
-err = s.Close()
-```

@@ -1,7 +1,10 @@
-module github.com/bobg/hashsplit
+module github.com/bobg/hashsplit/v2
 
-go 1.16
+go 1.23
 
 require github.com/chmduquesne/rollinghash v4.0.0+incompatible
 
-retract [v1.0.0, v1.0.2]
+require (
+	github.com/bobg/go-generics/v3 v3.7.0 // indirect
+	github.com/bobg/seqs v1.2.0 // indirect
+)
