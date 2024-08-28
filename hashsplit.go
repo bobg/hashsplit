@@ -18,7 +18,7 @@ const (
 )
 
 // Splitter hashsplits a byte stream into chunks.
-// Create a new Splitter with NewSplitter.
+// Create a new Splitter with [NewSplitter].
 //
 // Hashsplitting is a way of dividing a byte stream into pieces
 // based on the stream's content rather than on any predetermined chunk size.
@@ -81,7 +81,7 @@ func Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 func NewSplitter() *Splitter {
 	rs := buzhash32.New()
 	var zeroes [windowSize]byte
-	rs.Write(zeroes[:]) // initialize the rolling checksum window
+	_, _ = rs.Write(zeroes[:]) // initialize the rolling checksum window
 
 	return &Splitter{rs: rs}
 }
@@ -162,7 +162,7 @@ func (s *Splitter) checkSplit() (int, bool) {
 	return 0, false
 }
 
-// Tree arranges a sequence of chunks produced by a splitter into a "hashsplit tree."
+// Tree arranges a sequence of chunks produced by a Splitter into a "hashsplit tree."
 // The result is an iterator of TreeNode/level pairs in a particular order;
 // see details below.
 // The final pair in the sequence is the root of the tree.
@@ -222,9 +222,9 @@ func (s *Splitter) checkSplit() (int, bool) {
 // like a hash or a lookup key.
 // Here's how this might be done:
 //
-//	split, errptr := Split(input)
-//	tree := Tree(split)
-//	var root *TreeNode
+//	split, errptr := hashsplit.Split(input)
+//	tree := hashsplit.Tree(split)
+//	var root *hashsplit.TreeNode
 //	for node := range tree {
 //	  for i, chunk := range node.Chunks {
 //	    saved, err := saveAside(chunk)
@@ -251,10 +251,10 @@ func (s *Splitter) checkSplit() (int, bool) {
 // by reducing each chunk's level value as seen by Tree.
 // Here's how that might look:
 //
-//	split, errptr := Split(input)
+//	split, errptr := hashsplit.Split(input)
 //	reducedLevels := func(yield func([]byte, int) bool) { split(func(chunk []byte, level int) bool { return yield(chunk, level/4) }) }
-//	tree := Tree(reducedLevels)
-//	var root *TreeNode
+//	tree := hashsplit.Tree(reducedLevels)
+//	var root *hashsplit.TreeNode
 //	for node := range tree {
 //	  root = node
 //	}
