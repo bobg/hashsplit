@@ -64,7 +64,10 @@ func TestTree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := buildTree(t, text)
+	root, err := buildTree(text)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if !compareTrees(root, wantTree) {
 		t.Fatal("tree mismatch")
@@ -96,7 +99,10 @@ func TestSeek(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root := buildTree(t, text)
+	root, err := buildTree(text)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name    string
@@ -150,25 +156,18 @@ func BenchmarkTree(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		buildTree(b, text)
+		_, _ = buildTree(text)
 	}
 }
 
-type fataler interface {
-	Fatal(...interface{})
-}
-
-func buildTree(f fataler, text []byte) *TreeNode {
+func buildTree(text []byte) (*TreeNode, error) {
 	split, errptr := Split(bytes.NewReader(text))
 	tree := Tree(split)
 	var root *TreeNode
 	for node := range tree {
 		root = node
 	}
-	if err := *errptr; err != nil {
-		f.Fatal(err)
-	}
-	return root
+	return root, *errptr
 }
 
 // Compares two trees, disregarding the contents of the leaves.
