@@ -8,7 +8,7 @@ import (
 	"iter"
 	"math/bits"
 
-	"github.com/chmduquesne/rollinghash/buzhash32"
+	"github.com/bobg/hashsplit/v3/cp32"
 )
 
 const (
@@ -66,7 +66,7 @@ type Splitter struct {
 	// This is the recommended rolling-checksum algorithm for hashsplitting
 	// according to the document at github.com/hashsplit/hashsplit-spec
 	// (presently in draft form).
-	rs *buzhash32.Buzhash32
+	h *cp32.Hash
 }
 
 // Split hashsplits its input using a default Splitter.
@@ -79,11 +79,7 @@ func Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 // NewSplitter produces a new Splitter.
 // It may be customized before use by setting its MinSize and SplitBits fields.
 func NewSplitter() *Splitter {
-	rs := buzhash32.New()
-	var zeroes [windowSize]byte
-	_, _ = rs.Write(zeroes[:]) // initialize the rolling checksum window
-
-	return &Splitter{rs: rs}
+	return &Splitter{h: cp32.New(windowSize)}
 }
 
 // Split consumes the given input stream and hashsplits it, producing an iterator of chunk/level pairs.
@@ -133,7 +129,7 @@ func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 				return
 			}
 			s.chunk = append(s.chunk, c)
-			s.rs.Roll(c)
+			s.h.Roll(c)
 			if len(s.chunk) < minSize {
 				continue
 			}
@@ -154,7 +150,7 @@ func (s *Splitter) checkSplit() (int, bool) {
 	if splitBits == 0 {
 		splitBits = defaultSplitBits
 	}
-	h := s.rs.Sum32()
+	h := s.h.Sum32()
 	tz := bits.TrailingZeros32(h)
 	if tz >= splitBits {
 		return tz - splitBits, true
@@ -350,7 +346,7 @@ var ErrNotFound = errors.New("not found")
 
 // Seek finds the level-0 node representing the given byte position
 // (i.e., the one where Offset <= pos < Offset+Size).
-func Seek(n *TreeNode, pos uint64) (*TreeNode, error) {
+func (n *TreeNode) Seek(pos uint64) (*TreeNode, error) {
 	if pos < n.Offset || pos >= (n.Offset+n.Size) {
 		return nil, ErrNotFound
 	}
@@ -366,7 +362,7 @@ func Seek(n *TreeNode, pos uint64) (*TreeNode, error) {
 		if pos >= (child.Offset + child.Size) {
 			continue
 		}
-		return Seek(child, pos)
+		return child.Seek(pos)
 	}
 
 	// With a properly formed tree of nodes this will not be reached.

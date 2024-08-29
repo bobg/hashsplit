@@ -3,103 +3,105 @@ package hashsplit
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/bobg/seqs"
+	"github.com/bradleyjkemp/cupaloy/v2"
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestSplit(t *testing.T) {
-	f, err := os.Open("testdata/commonsense.txt")
+	files, err := os.ReadDir("testdata")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	for _, file := range files {
+		path := filepath.Join("testdata", file.Name())
+		if file.IsDir() {
+			continue
+		}
+		t.Run(file.Name(), func(t *testing.T) {
+			text, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			split, errptr := Split(bytes.NewReader(text))
+			chunks := slices.Collect(seqs.Left(split))
+			if err := *errptr; err != nil {
+				t.Fatal(err)
+			}
 
-	var i int
-	split, errptr := Split(f)
-	for chunk := range split {
-		i++
-		want, err := os.ReadFile(fmt.Sprintf("testdata/chunk%02d", i))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(chunk, want) {
-			t.Errorf("mismatch in chunk %d", i)
-		}
-	}
-	if err := *errptr; err != nil {
-		t.Fatal(err)
-	}
+			if len(text) == 0 {
+				if len(chunks) != 0 {
+					t.Errorf("got %d chunks, want 0", len(chunks))
+				}
+				return
+			}
 
-	const wantChunks = 16
-	if i != wantChunks {
-		t.Errorf("got %d chunks, want %d", i, wantChunks)
-	}
-}
+			snap := cupaloy.New(cupaloy.SnapshotSubdirectory("testdata/snapshots"))
+			snap.SnapshotT(t, chunks)
 
-func TestSplitFew(t *testing.T) {
-	for num := 0; num < 2; num++ {
-		var (
-			inp = make([]byte, num)
-			got []byte
-		)
+			var got []byte
+			for _, chunk := range chunks {
+				got = append(got, chunk...)
+			}
 
-		split, errptr := Split(bytes.NewReader(inp))
-		for chunk := range split {
-			got = append(got, chunk...)
-		}
-		if err := *errptr; err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != num {
-			t.Errorf("got %d byte(s), want %d", len(got), num)
-		}
+			if diff := cmp.Diff(string(text), string(got)); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
 func TestTree(t *testing.T) {
-	text, err := os.ReadFile("testdata/commonsense.txt")
+	files, err := os.ReadDir("testdata")
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, file := range files {
+		path := filepath.Join("testdata", file.Name())
+		if file.IsDir() {
+			continue
+		}
+		t.Run(file.Name(), func(t *testing.T) {
+			text, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			split, errptr := Split(bytes.NewReader(text))
+			tree := Tree(split)
+			root, ok := seqs.Last(seqs.Left(tree))
+			if err := *errptr; err != nil {
+				t.Fatal(err)
+			}
 
-	root, err := buildTree(text)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !compareTrees(root, wantTree) {
-		t.Fatal("tree mismatch")
-	}
-
-	var innerErr error
-
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		for chunk := range root.AllChunks() {
-			_, innerErr = pw.Write(chunk)
-			if innerErr != nil {
+			if len(text) == 0 {
+				if ok {
+					t.Error("got a root node, want an empty tree")
+				}
 				return
 			}
-		}
-	}()
 
-	reassembled, err := io.ReadAll(pr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if innerErr != nil {
-		t.Fatal(innerErr)
-	}
-	if !bytes.Equal(text, reassembled) {
-		t.Error("reassembled text does not match original")
+			snap := cupaloy.New(cupaloy.SnapshotSubdirectory("testdata/snapshots"))
+			snap.SnapshotT(t, root)
+
+			var got []byte
+			for chunk := range root.AllChunks() {
+				got = append(got, chunk...)
+			}
+
+			if diff := cmp.Diff(string(text), string(got)); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
 func TestSeek(t *testing.T) {
-	text, err := os.ReadFile("testdata/commonsense.txt")
+	text, err := os.ReadFile("testdata/commonsense")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,25 +119,25 @@ func TestSeek(t *testing.T) {
 	}{{
 		name: "left end",
 		pos:  0,
-		want: &TreeNode{Chunks: [][]byte{nil, nil}, Size: 35796},
+		want: &TreeNode{Chunks: [][]byte{nil}, Size: 1864},
 	}, {
 		name: "right end",
-		pos:  31483 + 116651 - 1,
-		want: &TreeNode{Chunks: [][]byte{nil, nil, nil}, Size: 31483, Offset: 116651},
+		pos:  148133,
+		want: &TreeNode{Chunks: [][]byte{nil, nil, nil, nil, nil}, Offset: 109169, Size: 38965},
 	}, {
 		name:    "past the end",
-		pos:     31483 + 116651,
+		pos:     200000,
 		want:    nil,
 		wanterr: true,
 	}, {
 		name: "in the middle",
 		pos:  100000,
-		want: &TreeNode{Chunks: [][]byte{nil}, Size: 6775, Offset: 98993},
+		want: &TreeNode{Chunks: [][]byte{nil, nil}, Offset: 92940, Size: 16229},
 	}}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := Seek(root, c.pos)
+			got, err := root.Seek(c.pos)
 			if c.wanterr {
 				if err == nil {
 					t.Error("wanted an error, got nil")
@@ -153,7 +155,7 @@ func TestSeek(t *testing.T) {
 }
 
 func BenchmarkTree(b *testing.B) {
-	text, err := os.ReadFile("testdata/commonsense.txt")
+	text, err := os.ReadFile("testdata/commonsense")
 	if err != nil {
 		b.Fatal(err)
 	}
