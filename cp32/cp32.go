@@ -60,13 +60,15 @@ var _ hash.Hash32 = &Hash{}
 const defaultWindowSize = 64
 
 // New produces a new [Hash] with the given window size,
-// which can be any positive number
-// but for best results should be a multiple of 32.
-// If this is zero or negative,
-// a default of 64 is used.
+// which should be a multiple of 32,
+// and is rounded up to the next multiple of 32 if it isn't.
 func New(windowSize int) *Hash {
 	if windowSize <= 0 {
 		windowSize = defaultWindowSize
+	}
+	if r := windowSize % 32; r != 0 {
+		// round windowSize up to the next multiple of 32
+		windowSize += 32 - r
 	}
 
 	h := &Hash{window: make([]byte, windowSize)}
@@ -106,15 +108,11 @@ func (*Hash) BlockSize() int  { return 32 }
 func (h *Hash) Sum32() uint32 { return h.val }
 
 func (h *Hash) Roll(b byte) {
-	var (
-		x0 = h.window[h.next]
-		p  = rotl(h.val, 1)
-		r  = rotl(g[x0], len(h.window))
-		s  = g[b]
-	)
-	h.val = p ^ r ^ s
+	x0 := h.window[h.next]
+	h.val = rotl(h.val, 1) ^ g[x0] ^ g[b]
 	h.window[h.next] = b
-	h.next = (h.next + 1) % len(h.window)
+	h.next++
+	h.next %= len(h.window)
 }
 
 func rotl(x uint32, n int) uint32 {
