@@ -3,6 +3,7 @@ package hashsplit
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,36 +24,46 @@ func TestSplit(t *testing.T) {
 		if file.IsDir() {
 			continue
 		}
-		t.Run(file.Name(), func(t *testing.T) {
-			text, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
+		for _, maxSize := range []int{0, 5000} {
+			name := file.Name()
+			if maxSize > 0 {
+				name += fmt.Sprintf("-%d", maxSize)
 			}
-			split, errptr := Split(bytes.NewReader(text))
-			chunks := slices.Collect(seqs.Left(split))
-			if err := *errptr; err != nil {
-				t.Fatal(err)
-			}
-
-			if len(text) == 0 {
-				if len(chunks) != 0 {
-					t.Errorf("got %d chunks, want 0", len(chunks))
+			t.Run(name, func(t *testing.T) {
+				text, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
 				}
-				return
-			}
 
-			snap := cupaloy.New(cupaloy.SnapshotSubdirectory("testdata/snapshots"))
-			snap.SnapshotT(t, chunks)
+				s := NewSplitter()
+				s.MaxSize = maxSize
 
-			var got []byte
-			for _, chunk := range chunks {
-				got = append(got, chunk...)
-			}
+				split, errptr := s.Split(bytes.NewReader(text))
+				chunks := slices.Collect(seqs.Left(split))
+				if err := *errptr; err != nil {
+					t.Fatal(err)
+				}
 
-			if diff := cmp.Diff(string(text), string(got)); diff != "" {
-				t.Errorf("mismatch (-want +got):\n%s", diff)
-			}
-		})
+				if len(text) == 0 {
+					if len(chunks) != 0 {
+						t.Errorf("got %d chunks, want 0", len(chunks))
+					}
+					return
+				}
+
+				snap := cupaloy.New(cupaloy.SnapshotSubdirectory("testdata/snapshots"))
+				snap.SnapshotT(t, chunks)
+
+				var got []byte
+				for _, chunk := range chunks {
+					got = append(got, chunk...)
+				}
+
+				if diff := cmp.Diff(string(text), string(got)); diff != "" {
+					t.Errorf("mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
 	}
 }
 

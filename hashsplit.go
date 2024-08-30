@@ -51,6 +51,12 @@ type Splitter struct {
 	// set this to 1.
 	MinSize int
 
+	// MaxSize is the maximum chunk size.
+	// If it's zero, there is no maximum.
+	// This is the default.
+	// If it's some other value less than MinSize, then MinSize is used.
+	MaxSize int
+
 	// SplitBits is the number of trailing zero bits in the rolling checksum required to produce a chunk.
 	// The default (what you get if you leave it set to zero) is 13,
 	// which means a chunk boundary occurs on average once every 8,192 bytes.
@@ -77,7 +83,7 @@ func Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 }
 
 // NewSplitter produces a new Splitter.
-// It may be customized before use by setting its MinSize and SplitBits fields.
+// It may be customized before use by setting its MinSize, MaxSize, and SplitBits fields.
 func NewSplitter() *Splitter {
 	return &Splitter{h: cp32.New(windowSize)}
 }
@@ -111,6 +117,11 @@ func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 		minSize = defaultMinSize
 	}
 
+	maxSize := s.MaxSize
+	if maxSize != 0 && maxSize < minSize {
+		maxSize = minSize
+	}
+
 	var err error
 
 	f := func(yield func([]byte, int) bool) {
@@ -130,10 +141,11 @@ func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 			}
 			s.chunk = append(s.chunk, c)
 			s.h.Roll(c)
-			if len(s.chunk) < minSize {
+			chunkLen := len(s.chunk)
+			if chunkLen < minSize {
 				continue
 			}
-			if level, shouldSplit := s.checkSplit(); shouldSplit {
+			if level, shouldSplit := s.checkSplit(); shouldSplit || (maxSize != 0 && chunkLen >= maxSize) {
 				if !yield(s.chunk, level) {
 					return
 				}
@@ -151,8 +163,7 @@ func (s *Splitter) checkSplit() (int, bool) {
 		splitBits = defaultSplitBits
 	}
 	h := s.h.Sum32()
-	tz := bits.TrailingZeros32(h)
-	if tz >= splitBits {
+	if tz := bits.TrailingZeros32(h); tz >= splitBits {
 		return tz - splitBits, true
 	}
 	return 0, false
