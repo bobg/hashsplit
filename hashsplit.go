@@ -333,17 +333,27 @@ type TreeNode struct {
 	Chunks [][]byte
 }
 
-// AllChunks produces an iterator over all the chunks in the tree.
-// It does this with a recursive tree walk starting at n.
-func (n *TreeNode) AllChunks() iter.Seq[[]byte] {
-	return func(yield func([]byte) bool) {
-		for _, chunk := range n.Chunks {
-			if !yield(chunk) {
-				return
-			}
+// Pre produces an iterator over the nodes in the tree as a pre-order traversal.
+func (n *TreeNode) Pre() iter.Seq[*TreeNode] {
+	return func(yield func(*TreeNode) bool) {
+		if !yield(n) {
+			return
 		}
 		for _, child := range n.Children {
-			for chunk := range child.AllChunks() {
+			for node := range child.Pre() {
+				if !yield(node) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// AllChunks produces an iterator over all the chunks in the tree.
+func (n *TreeNode) AllChunks() iter.Seq[[]byte] {
+	return func(yield func([]byte) bool) {
+		for n := range n.Pre() {
+			for _, chunk := range n.Chunks {
 				if !yield(chunk) {
 					return
 				}

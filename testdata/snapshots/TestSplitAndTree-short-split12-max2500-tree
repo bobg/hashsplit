@@ -3,8 +3,6 @@
   Size: (uint64) 14,
   Children: ([]*hashsplit.TreeNode) <nil>,
   Chunks: ([][]uint8) (len=1) {
-    ([]uint8) (len=14) {
-      00000000  48 65 6c 6c 6f 2c 20 77  6f 72 6c 64 21 0a        |Hello, world!.|
-    }
+    ([]uint8) <nil>
   }
 })

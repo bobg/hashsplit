@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
+	"github.com/bobg/go-generics/v4/slices"
 	"github.com/bobg/seqs"
 	"github.com/bradleyjkemp/cupaloy/v2"
 	"github.com/google/go-cmp/cmp"
 )
 
-func TestSplit(t *testing.T) {
+func TestSplitAndTree(t *testing.T) {
 	files, err := os.ReadDir("testdata")
 	if err != nil {
 		t.Fatal(err)
@@ -24,90 +24,94 @@ func TestSplit(t *testing.T) {
 		if file.IsDir() {
 			continue
 		}
-		for _, maxSize := range []int{0, 5000} {
-			name := file.Name()
-			if maxSize > 0 {
-				name += fmt.Sprintf("-%d", maxSize)
-			}
-			t.Run(name, func(t *testing.T) {
-				text, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				s := NewSplitter()
-				s.MaxSize = maxSize
-
-				split, errptr := s.Split(bytes.NewReader(text))
-				chunks := slices.Collect(seqs.Left(split))
-				if err := *errptr; err != nil {
-					t.Fatal(err)
-				}
-
-				if len(text) == 0 {
-					if len(chunks) != 0 {
-						t.Errorf("got %d chunks, want 0", len(chunks))
+		for splitBits := 12; splitBits <= 14; splitBits++ {
+			minSizes := []int{0, 512 << (splitBits - 12)}
+			for _, minSize := range minSizes {
+				maxSizes := []int{0, 2500 << (splitBits - 12)}
+				for _, maxSize := range maxSizes {
+					name := fmt.Sprintf("%s-split%d", file.Name(), splitBits)
+					if minSize > 0 {
+						name += fmt.Sprintf("-min%d", minSize)
 					}
-					return
-				}
+					if maxSize > 0 {
+						name += fmt.Sprintf("-max%d", maxSize)
+					}
+					t.Run(name, func(t *testing.T) {
+						text, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
 
-				snap := cupaloy.New(cupaloy.SnapshotSubdirectory("testdata/snapshots"))
-				snap.SnapshotT(t, chunks)
+						s := NewSplitter()
+						s.SplitBits = splitBits
+						s.MinSize = minSize
+						s.MaxSize = maxSize
 
-				var got []byte
-				for _, chunk := range chunks {
-					got = append(got, chunk...)
-				}
+						split, errptr := s.Split(bytes.NewReader(text))
+						pairs := slices.Collect(seqs.ToPairs(split))
+						if err := *errptr; err != nil {
+							t.Fatal(err)
+						}
 
-				if diff := cmp.Diff(string(text), string(got)); diff != "" {
-					t.Errorf("mismatch (-want +got):\n%s", diff)
+						snap := cupaloy.New(cupaloy.SnapshotSubdirectory("testdata/snapshots"))
+
+						t.Run("split", func(t *testing.T) {
+							chunks := slices.Map(pairs, func(pair seqs.Pair[[]byte, int]) []byte { return pair.X })
+
+							if len(text) == 0 {
+								if len(chunks) != 0 {
+									t.Errorf("got %d chunks, want 0", len(chunks))
+								}
+								return
+							}
+
+							sizes := slices.Map(chunks, func(chunk []byte) int { return len(chunk) })
+							snap.SnapshotT(t, sizes)
+
+							var got []byte
+							for _, chunk := range chunks {
+								got = append(got, chunk...)
+							}
+
+							if diff := cmp.Diff(string(text), string(got)); diff != "" {
+								t.Errorf("mismatch (-want +got):\n%s", diff)
+							}
+						})
+
+						t.Run("tree", func(t *testing.T) {
+							tree := Tree(seqs.FromPairs(slices.Values(pairs)))
+							root, ok := seqs.Last(seqs.Left(tree))
+							if len(pairs) == 0 {
+								if ok {
+									t.Fatal("non-empty tree")
+								}
+								return
+							}
+
+							if !ok {
+								t.Fatal("empty tree")
+							}
+
+							var got []byte
+							for chunk := range root.AllChunks() {
+								got = append(got, chunk...)
+							}
+
+							if diff := cmp.Diff(string(text), string(got)); diff != "" {
+								t.Errorf("mismatch (-want +got):\n%s", diff)
+							}
+
+							for node := range root.Pre() {
+								for i := 0; i < len(node.Chunks); i++ {
+									node.Chunks[i] = nil
+								}
+							}
+							snap.SnapshotT(t, root)
+						})
+					})
 				}
-			})
+			}
 		}
-	}
-}
-
-func TestTree(t *testing.T) {
-	files, err := os.ReadDir("testdata")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, file := range files {
-		path := filepath.Join("testdata", file.Name())
-		if file.IsDir() {
-			continue
-		}
-		t.Run(file.Name(), func(t *testing.T) {
-			text, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			split, errptr := Split(bytes.NewReader(text))
-			tree := Tree(split)
-			root, ok := seqs.Last(seqs.Left(tree))
-			if err := *errptr; err != nil {
-				t.Fatal(err)
-			}
-
-			if len(text) == 0 {
-				if ok {
-					t.Error("got a root node, want an empty tree")
-				}
-				return
-			}
-
-			snap := cupaloy.New(cupaloy.SnapshotSubdirectory("testdata/snapshots"))
-			snap.SnapshotT(t, root)
-
-			var got []byte
-			for chunk := range root.AllChunks() {
-				got = append(got, chunk...)
-			}
-
-			if diff := cmp.Diff(string(text), string(got)); diff != "" {
-				t.Errorf("mismatch (-want +got):\n%s", diff)
-			}
-		})
 	}
 }
 
