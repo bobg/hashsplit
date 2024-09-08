@@ -83,6 +83,11 @@ func (h *Hash) Write(inp []byte) (int, error) {
 	return len(inp), nil
 }
 
+func (h *Hash) WriteByte(b byte) error {
+	h.Roll(b)
+	return nil
+}
+
 func (h *Hash) Sum(b []byte) []byte {
 	return append(b, byte(h.val>>24), byte(h.val>>16), byte(h.val>>8), byte(h.val))
 }
