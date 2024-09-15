@@ -24,9 +24,9 @@ func TestHash(t *testing.T) {
 	}, {
 		name: "empty", want: 0,
 	}, {
-		name: "one", want: 0x2b4ff429,
+		name: "one", want: 0x407d9eed,
 	}, {
-		name: "short", want: 0x17f0426d,
+		name: "short", want: 0xb88e926a,
 	}}
 
 	for _, tc := range cases {
@@ -51,6 +51,7 @@ func TestHash(t *testing.T) {
 	}
 }
 
+// Tests that hashing string xS and then rolling on y (and rolling off x) is the same as hashing Sy.
 func FuzzHash(f *testing.F) {
 	f.Fuzz(func(t *testing.T, a, b, c, d uint64, pre byte) {
 		var inp [32]byte

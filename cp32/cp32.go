@@ -2,6 +2,7 @@ package cp32
 
 import "hash"
 
+// See https://hashsplit.github.io/spec.html#appendix
 var g = [...]uint32{
 	0x6b326ac4, 0x13f8e1bd, 0x1d61066f, 0x87733fc7, 0x37145391, 0x1c115e40,
 	0xd2ea17a3, 0x8650e4b1, 0xe892bb09, 0x408a0c3a, 0x3c40b72c, 0x2a988fb0,
@@ -71,8 +72,7 @@ func New(windowSize int) *Hash {
 		windowSize += 32 - r
 	}
 
-	h := &Hash{window: make([]byte, windowSize)}
-	h.Reset()
+	h := &Hash{window: make([]byte, 0, windowSize)}
 	return h
 }
 
@@ -93,18 +93,10 @@ func (h *Hash) Sum(b []byte) []byte {
 }
 
 // Reset zeroes out the "window" of recently written bytes
-// and sets the hash value to the cp32 of those zero bytes.
+// and sets the hash value to the cp32 back to zero.
 func (h *Hash) Reset() {
-	windowSize := len(h.window)
-
-	h.window[0] = 0
-	h.val = rotl(g[0], windowSize+1)
-
-	for i := 1; i < windowSize; i++ {
-		h.window[i] = 0
-		h.val ^= rotl(g[0], windowSize-i+1)
-	}
-
+	h.window = h.window[:0]
+	h.val = 0
 	h.next = 0
 }
 
@@ -113,11 +105,16 @@ func (*Hash) BlockSize() int  { return 32 }
 func (h *Hash) Sum32() uint32 { return h.val }
 
 func (h *Hash) Roll(b byte) {
+	h.val = rotl(h.val, 1) ^ g[b]
+	if l := len(h.window); l < cap(h.window) {
+		h.window = append(h.window, b)
+		return
+	}
 	x0 := h.window[h.next]
-	h.val = rotl(h.val, 1) ^ g[x0] ^ g[b]
+	h.val ^= g[x0]
 	h.window[h.next] = b
 	h.next++
-	h.next %= len(h.window)
+	h.next %= cap(h.window)
 }
 
 func rotl(x uint32, n int) uint32 {
