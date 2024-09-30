@@ -7,6 +7,7 @@ import (
 	"io"
 	"iter"
 	"math/bits"
+	"sort"
 
 	"github.com/bobg/hashsplit/v3/cp32"
 )
@@ -367,6 +368,7 @@ var ErrNotFound = errors.New("not found")
 
 // Seek finds the level-0 node representing the given byte position
 // (i.e., the one where Offset <= pos < Offset+Size).
+// If the position is not found at or under the given node, Seek returns ErrNotFound.
 func (n *TreeNode) Seek(pos uint64) (*TreeNode, error) {
 	if pos < n.Offset || pos >= (n.Offset+n.Size) {
 		return nil, ErrNotFound
@@ -377,15 +379,28 @@ func (n *TreeNode) Seek(pos uint64) (*TreeNode, error) {
 		return n, nil
 	}
 
-	// TODO: if a Node kept track of its children's offsets,
-	// this loop could be replaced with a sort.Search call.
-	for _, child := range n.Children {
-		if pos >= (child.Offset + child.Size) {
-			continue
+	if false {
+		idx := sort.Search(num, func(i int) (ok bool) {
+			child := n.Children[i]
+			return pos < child.Offset+child.Size
+		})
+		if idx == num {
+			// With a properly formed tree of nodes this will not be reached.
+			return nil, ErrNotFound
 		}
-		return child.Seek(pos)
-	}
+		return n.Children[idx].Seek(pos)
+	} else {
+		// Surprisingly, the following code is faster than the sort.Search call above,
+		// at least in the case tested by BenchmarkSeek.
 
-	// With a properly formed tree of nodes this will not be reached.
-	return nil, ErrNotFound
+		for _, child := range n.Children {
+			if pos >= (child.Offset + child.Size) {
+				continue
+			}
+			return child.Seek(pos)
+		}
+
+		// With a properly formed tree of nodes this will not be reached.
+		return nil, ErrNotFound
+	}
 }

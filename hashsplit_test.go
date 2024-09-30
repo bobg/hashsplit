@@ -169,6 +169,23 @@ func TestSeek(t *testing.T) {
 	}
 }
 
+func BenchmarkSeek(b *testing.B) {
+	text, err := os.ReadFile("testdata/commonsense")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	root, err := buildTree(text)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for range b.N {
+		_, _ = root.Seek(100000)
+	}
+}
+
 func BenchmarkTree(b *testing.B) {
 	text, err := os.ReadFile("testdata/commonsense")
 	if err != nil {
