@@ -168,10 +168,7 @@ func BenchmarkTree(b *testing.B) {
 func buildTree(text []byte) (*TreeNode, error) {
 	split, errptr := Split(bytes.NewReader(text))
 	tree := Tree(split)
-	var root *TreeNode
-	for node := range tree {
-		root = node
-	}
+	root := Root(tree)
 	return root, *errptr
 }
 

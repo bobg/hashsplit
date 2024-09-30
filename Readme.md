@@ -32,10 +32,7 @@ Chunks can be arranged in a “hashsplit tree” like this:
 ```go
 split, errptr := hashsplit.Split(r)
 tree := hashsplit.Tree(split)
-var root *hashsplit.TreeNode
-for node := range tree {
-  root = node
-}
+root := hashsplit.Root(tree)
 if err := *errptr; err != nil {
   // ...handle an error reading from r...
 }

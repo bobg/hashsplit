@@ -312,6 +312,17 @@ func Tree(inp iter.Seq2[[]byte, int]) iter.Seq2[*TreeNode, int] {
 	}
 }
 
+// Root takes the output of [Tree] and returns the root of the tree.
+// It does this by consuming the iterator and returning the last node,
+// discarding everything else.
+func Root(tree iter.Seq2[*TreeNode, int]) *TreeNode {
+	var root *TreeNode
+	for node := range tree {
+		root = node
+	}
+	return root
+}
+
 // TreeNode is the type of a node in the tree produced by [Tree].
 type TreeNode struct {
 	// Offset and Size describe the range of the original input stream encompassed by this node.
