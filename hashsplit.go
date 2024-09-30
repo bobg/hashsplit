@@ -7,8 +7,9 @@ import (
 	"io"
 	"iter"
 	"math/bits"
+	"sort"
 
-	"github.com/chmduquesne/rollinghash/buzhash32"
+	"github.com/bobg/hashsplit/v3/cp32"
 )
 
 const (
@@ -51,6 +52,12 @@ type Splitter struct {
 	// set this to 1.
 	MinSize int
 
+	// MaxSize is the maximum chunk size.
+	// If it's zero, there is no maximum.
+	// This is the default.
+	// If it's some other value less than MinSize, then MinSize is used.
+	MaxSize int
+
 	// SplitBits is the number of trailing zero bits in the rolling checksum required to produce a chunk.
 	// The default (what you get if you leave it set to zero) is 13,
 	// which means a chunk boundary occurs on average once every 8,192 bytes.
@@ -66,7 +73,7 @@ type Splitter struct {
 	// This is the recommended rolling-checksum algorithm for hashsplitting
 	// according to the document at github.com/hashsplit/hashsplit-spec
 	// (presently in draft form).
-	rs *buzhash32.Buzhash32
+	h *cp32.Hash
 }
 
 // Split hashsplits its input using a default Splitter.
@@ -77,13 +84,9 @@ func Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 }
 
 // NewSplitter produces a new Splitter.
-// It may be customized before use by setting its MinSize and SplitBits fields.
+// It may be customized before use by setting its MinSize, MaxSize, and SplitBits fields.
 func NewSplitter() *Splitter {
-	rs := buzhash32.New()
-	var zeroes [windowSize]byte
-	_, _ = rs.Write(zeroes[:]) // initialize the rolling checksum window
-
-	return &Splitter{rs: rs}
+	return &Splitter{h: cp32.New(windowSize)}
 }
 
 // Split consumes the given input stream and hashsplits it, producing an iterator of chunk/level pairs.
@@ -115,6 +118,11 @@ func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 		minSize = defaultMinSize
 	}
 
+	maxSize := s.MaxSize
+	if maxSize != 0 && maxSize < minSize {
+		maxSize = minSize
+	}
+
 	var err error
 
 	f := func(yield func([]byte, int) bool) {
@@ -133,11 +141,12 @@ func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 				return
 			}
 			s.chunk = append(s.chunk, c)
-			s.rs.Roll(c)
-			if len(s.chunk) < minSize {
+			s.h.Roll(c)
+			chunkLen := len(s.chunk)
+			if chunkLen < minSize {
 				continue
 			}
-			if level, shouldSplit := s.checkSplit(); shouldSplit {
+			if level, shouldSplit := s.checkSplit(); shouldSplit || (maxSize != 0 && chunkLen >= maxSize) {
 				if !yield(s.chunk, level) {
 					return
 				}
@@ -154,9 +163,8 @@ func (s *Splitter) checkSplit() (int, bool) {
 	if splitBits == 0 {
 		splitBits = defaultSplitBits
 	}
-	h := s.rs.Sum32()
-	tz := bits.TrailingZeros32(h)
-	if tz >= splitBits {
+	h := s.h.Sum32()
+	if tz := bits.TrailingZeros32(h); tz >= splitBits {
 		return tz - splitBits, true
 	}
 	return 0, false
@@ -326,17 +334,27 @@ type TreeNode struct {
 	Chunks [][]byte
 }
 
-// AllChunks produces an iterator over all the chunks in the tree.
-// It does this with a recursive tree walk starting at n.
-func (n *TreeNode) AllChunks() iter.Seq[[]byte] {
-	return func(yield func([]byte) bool) {
-		for _, chunk := range n.Chunks {
-			if !yield(chunk) {
-				return
-			}
+// Pre produces an iterator over the nodes in the tree as a pre-order traversal.
+func (n *TreeNode) Pre() iter.Seq[*TreeNode] {
+	return func(yield func(*TreeNode) bool) {
+		if !yield(n) {
+			return
 		}
 		for _, child := range n.Children {
-			for chunk := range child.AllChunks() {
+			for node := range child.Pre() {
+				if !yield(node) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// AllChunks produces an iterator over all the chunks in the tree.
+func (n *TreeNode) AllChunks() iter.Seq[[]byte] {
+	return func(yield func([]byte) bool) {
+		for n := range n.Pre() {
+			for _, chunk := range n.Chunks {
 				if !yield(chunk) {
 					return
 				}
@@ -350,7 +368,8 @@ var ErrNotFound = errors.New("not found")
 
 // Seek finds the level-0 node representing the given byte position
 // (i.e., the one where Offset <= pos < Offset+Size).
-func Seek(n *TreeNode, pos uint64) (*TreeNode, error) {
+// If the position is not found at or under the given node, Seek returns ErrNotFound.
+func (n *TreeNode) Seek(pos uint64) (*TreeNode, error) {
 	if pos < n.Offset || pos >= (n.Offset+n.Size) {
 		return nil, ErrNotFound
 	}
@@ -360,15 +379,28 @@ func Seek(n *TreeNode, pos uint64) (*TreeNode, error) {
 		return n, nil
 	}
 
-	// TODO: if a Node kept track of its children's offsets,
-	// this loop could be replaced with a sort.Search call.
-	for _, child := range n.Children {
-		if pos >= (child.Offset + child.Size) {
-			continue
+	if false {
+		idx := sort.Search(num, func(i int) (ok bool) {
+			child := n.Children[i]
+			return pos < child.Offset+child.Size
+		})
+		if idx == num {
+			// With a properly formed tree of nodes this will not be reached.
+			return nil, ErrNotFound
 		}
-		return Seek(child, pos)
-	}
+		return n.Children[idx].Seek(pos)
+	} else {
+		// Surprisingly, the following code is faster than the sort.Search call above,
+		// at least in the case tested by BenchmarkSeek.
 
-	// With a properly formed tree of nodes this will not be reached.
-	return nil, ErrNotFound
+		for _, child := range n.Children {
+			if pos >= (child.Offset + child.Size) {
+				continue
+			}
+			return child.Seek(pos)
+		}
+
+		// With a properly formed tree of nodes this will not be reached.
+		return nil, ErrNotFound
+	}
 }

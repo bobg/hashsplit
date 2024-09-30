@@ -1,0 +1,191 @@
+(*hashsplit.TreeNode)({
+  Offset: (uint64) 0,
+  Size: (uint64) 148134,
+  Children: ([]*hashsplit.TreeNode) (len=2) {
+    (*hashsplit.TreeNode)({
+      Offset: (uint64) 0,
+      Size: (uint64) 50452,
+      Children: ([]*hashsplit.TreeNode) (len=1) {
+        (*hashsplit.TreeNode)({
+          Offset: (uint64) 0,
+          Size: (uint64) 50452,
+          Children: ([]*hashsplit.TreeNode) (len=1) {
+            (*hashsplit.TreeNode)({
+              Offset: (uint64) 0,
+              Size: (uint64) 50452,
+              Children: ([]*hashsplit.TreeNode) (len=2) {
+                (*hashsplit.TreeNode)({
+                  Offset: (uint64) 0,
+                  Size: (uint64) 37435,
+                  Children: ([]*hashsplit.TreeNode) (len=2) {
+                    (*hashsplit.TreeNode)({
+                      Offset: (uint64) 0,
+                      Size: (uint64) 22984,
+                      Children: ([]*hashsplit.TreeNode) (len=1) {
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 0,
+                          Size: (uint64) 22984,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=4) {
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>
+                          }
+                        })
+                      },
+                      Chunks: ([][]uint8) <nil>
+                    }),
+                    (*hashsplit.TreeNode)({
+                      Offset: (uint64) 22984,
+                      Size: (uint64) 14451,
+                      Children: ([]*hashsplit.TreeNode) (len=1) {
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 22984,
+                          Size: (uint64) 14451,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=2) {
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>
+                          }
+                        })
+                      },
+                      Chunks: ([][]uint8) <nil>
+                    })
+                  },
+                  Chunks: ([][]uint8) <nil>
+                }),
+                (*hashsplit.TreeNode)({
+                  Offset: (uint64) 37435,
+                  Size: (uint64) 13017,
+                  Children: ([]*hashsplit.TreeNode) (len=1) {
+                    (*hashsplit.TreeNode)({
+                      Offset: (uint64) 37435,
+                      Size: (uint64) 13017,
+                      Children: ([]*hashsplit.TreeNode) (len=1) {
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 37435,
+                          Size: (uint64) 13017,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=3) {
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>
+                          }
+                        })
+                      },
+                      Chunks: ([][]uint8) <nil>
+                    })
+                  },
+                  Chunks: ([][]uint8) <nil>
+                })
+              },
+              Chunks: ([][]uint8) <nil>
+            })
+          },
+          Chunks: ([][]uint8) <nil>
+        })
+      },
+      Chunks: ([][]uint8) <nil>
+    }),
+    (*hashsplit.TreeNode)({
+      Offset: (uint64) 50452,
+      Size: (uint64) 97682,
+      Children: ([]*hashsplit.TreeNode) (len=1) {
+        (*hashsplit.TreeNode)({
+          Offset: (uint64) 50452,
+          Size: (uint64) 97682,
+          Children: ([]*hashsplit.TreeNode) (len=1) {
+            (*hashsplit.TreeNode)({
+              Offset: (uint64) 50452,
+              Size: (uint64) 97682,
+              Children: ([]*hashsplit.TreeNode) (len=1) {
+                (*hashsplit.TreeNode)({
+                  Offset: (uint64) 50452,
+                  Size: (uint64) 97682,
+                  Children: ([]*hashsplit.TreeNode) (len=2) {
+                    (*hashsplit.TreeNode)({
+                      Offset: (uint64) 50452,
+                      Size: (uint64) 251,
+                      Children: ([]*hashsplit.TreeNode) (len=1) {
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 50452,
+                          Size: (uint64) 251,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=1) {
+                            ([]uint8) <nil>
+                          }
+                        })
+                      },
+                      Chunks: ([][]uint8) <nil>
+                    }),
+                    (*hashsplit.TreeNode)({
+                      Offset: (uint64) 50703,
+                      Size: (uint64) 97431,
+                      Children: ([]*hashsplit.TreeNode) (len=5) {
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 50703,
+                          Size: (uint64) 19342,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=2) {
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>
+                          }
+                        }),
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 70045,
+                          Size: (uint64) 1832,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=1) {
+                            ([]uint8) <nil>
+                          }
+                        }),
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 71877,
+                          Size: (uint64) 17720,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=3) {
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>
+                          }
+                        }),
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 89597,
+                          Size: (uint64) 3343,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=1) {
+                            ([]uint8) <nil>
+                          }
+                        }),
+                        (*hashsplit.TreeNode)({
+                          Offset: (uint64) 92940,
+                          Size: (uint64) 55194,
+                          Children: ([]*hashsplit.TreeNode) <nil>,
+                          Chunks: ([][]uint8) (len=6) {
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>,
+                            ([]uint8) <nil>
+                          }
+                        })
+                      },
+                      Chunks: ([][]uint8) <nil>
+                    })
+                  },
+                  Chunks: ([][]uint8) <nil>
+                })
+              },
+              Chunks: ([][]uint8) <nil>
+            })
+          },
+          Chunks: ([][]uint8) <nil>
+        })
+      },
+      Chunks: ([][]uint8) <nil>
+    })
+  },
+  Chunks: ([][]uint8) <nil>
+})

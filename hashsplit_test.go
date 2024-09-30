@@ -4,102 +4,119 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/bobg/go-generics/v4/slices"
+	"github.com/bobg/seqs"
+	"github.com/bradleyjkemp/cupaloy/v2"
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestSplit(t *testing.T) {
-	f, err := os.Open("testdata/commonsense.txt")
+func TestSplitAndTree(t *testing.T) {
+	files, err := os.ReadDir("testdata")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-
-	var i int
-	split, errptr := Split(f)
-	for chunk := range split {
-		i++
-		want, err := os.ReadFile(fmt.Sprintf("testdata/chunk%02d", i))
-		if err != nil {
-			t.Fatal(err)
+	for _, file := range files {
+		path := filepath.Join("testdata", file.Name())
+		if file.IsDir() {
+			continue
 		}
-		if !bytes.Equal(chunk, want) {
-			t.Errorf("mismatch in chunk %d", i)
-		}
-	}
-	if err := *errptr; err != nil {
-		t.Fatal(err)
-	}
+		for splitBits := 12; splitBits <= 14; splitBits++ {
+			minSizes := []int{0, 512 << (splitBits - 12)}
+			for _, minSize := range minSizes {
+				maxSizes := []int{0, 2500 << (splitBits - 12)}
+				for _, maxSize := range maxSizes {
+					name := fmt.Sprintf("%s-split%d", file.Name(), splitBits)
+					if minSize > 0 {
+						name += fmt.Sprintf("-min%d", minSize)
+					}
+					if maxSize > 0 {
+						name += fmt.Sprintf("-max%d", maxSize)
+					}
+					t.Run(name, func(t *testing.T) {
+						text, err := os.ReadFile(path)
+						if err != nil {
+							t.Fatal(err)
+						}
 
-	const wantChunks = 16
-	if i != wantChunks {
-		t.Errorf("got %d chunks, want %d", i, wantChunks)
-	}
-}
+						s := NewSplitter()
+						s.SplitBits = splitBits
+						s.MinSize = minSize
+						s.MaxSize = maxSize
 
-func TestSplitFew(t *testing.T) {
-	for num := 0; num < 2; num++ {
-		var (
-			inp = make([]byte, num)
-			got []byte
-		)
+						split, errptr := s.Split(bytes.NewReader(text))
+						pairs := slices.Collect(seqs.ToPairs(split))
+						if err := *errptr; err != nil {
+							t.Fatal(err)
+						}
 
-		split, errptr := Split(bytes.NewReader(inp))
-		for chunk := range split {
-			got = append(got, chunk...)
-		}
-		if err := *errptr; err != nil {
-			t.Fatal(err)
-		}
-		if len(got) != num {
-			t.Errorf("got %d byte(s), want %d", len(got), num)
-		}
-	}
-}
+						snap := cupaloy.New(cupaloy.SnapshotSubdirectory("testdata/snapshots"))
 
-func TestTree(t *testing.T) {
-	text, err := os.ReadFile("testdata/commonsense.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
+						t.Run("split", func(t *testing.T) {
+							chunks := slices.Map(pairs, func(pair seqs.Pair[[]byte, int]) []byte { return pair.X })
 
-	root, err := buildTree(text)
-	if err != nil {
-		t.Fatal(err)
-	}
+							if len(text) == 0 {
+								if len(chunks) != 0 {
+									t.Errorf("got %d chunks, want 0", len(chunks))
+								}
+								return
+							}
 
-	if !compareTrees(root, wantTree) {
-		t.Fatal("tree mismatch")
-	}
+							sizes := slices.Map(chunks, func(chunk []byte) int { return len(chunk) })
+							snap.SnapshotT(t, sizes)
 
-	var innerErr error
+							var got []byte
+							for _, chunk := range chunks {
+								got = append(got, chunk...)
+							}
 
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		for chunk := range root.AllChunks() {
-			_, innerErr = pw.Write(chunk)
-			if innerErr != nil {
-				return
+							if diff := cmp.Diff(string(text), string(got)); diff != "" {
+								t.Errorf("mismatch (-want +got):\n%s", diff)
+							}
+						})
+
+						t.Run("tree", func(t *testing.T) {
+							tree := Tree(seqs.FromPairs(slices.Values(pairs)))
+							root, ok := seqs.Last(seqs.Left(tree))
+							if len(pairs) == 0 {
+								if ok {
+									t.Fatal("non-empty tree")
+								}
+								return
+							}
+
+							if !ok {
+								t.Fatal("empty tree")
+							}
+
+							var got []byte
+							for chunk := range root.AllChunks() {
+								got = append(got, chunk...)
+							}
+
+							if diff := cmp.Diff(string(text), string(got)); diff != "" {
+								t.Errorf("mismatch (-want +got):\n%s", diff)
+							}
+
+							for node := range root.Pre() {
+								for i := 0; i < len(node.Chunks); i++ {
+									node.Chunks[i] = nil
+								}
+							}
+							snap.SnapshotT(t, root)
+						})
+					})
+				}
 			}
 		}
-	}()
-
-	reassembled, err := io.ReadAll(pr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if innerErr != nil {
-		t.Fatal(innerErr)
-	}
-	if !bytes.Equal(text, reassembled) {
-		t.Error("reassembled text does not match original")
 	}
 }
 
 func TestSeek(t *testing.T) {
-	text, err := os.ReadFile("testdata/commonsense.txt")
+	text, err := os.ReadFile("testdata/commonsense")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,25 +134,25 @@ func TestSeek(t *testing.T) {
 	}{{
 		name: "left end",
 		pos:  0,
-		want: &TreeNode{Chunks: [][]byte{nil, nil}, Size: 35796},
+		want: &TreeNode{Chunks: [][]byte{nil}, Size: 1864},
 	}, {
 		name: "right end",
-		pos:  31483 + 116651 - 1,
-		want: &TreeNode{Chunks: [][]byte{nil, nil, nil}, Size: 31483, Offset: 116651},
+		pos:  148133,
+		want: &TreeNode{Chunks: [][]byte{nil, nil, nil, nil, nil}, Offset: 109169, Size: 38965},
 	}, {
 		name:    "past the end",
-		pos:     31483 + 116651,
+		pos:     200000,
 		want:    nil,
 		wanterr: true,
 	}, {
 		name: "in the middle",
 		pos:  100000,
-		want: &TreeNode{Chunks: [][]byte{nil}, Size: 6775, Offset: 98993},
+		want: &TreeNode{Chunks: [][]byte{nil, nil}, Offset: 92940, Size: 16229},
 	}}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := Seek(root, c.pos)
+			got, err := root.Seek(c.pos)
 			if c.wanterr {
 				if err == nil {
 					t.Error("wanted an error, got nil")
@@ -152,8 +169,25 @@ func TestSeek(t *testing.T) {
 	}
 }
 
+func BenchmarkSeek(b *testing.B) {
+	text, err := os.ReadFile("testdata/commonsense")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	root, err := buildTree(text)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for range b.N {
+		_, _ = root.Seek(100000)
+	}
+}
+
 func BenchmarkTree(b *testing.B) {
-	text, err := os.ReadFile("testdata/commonsense.txt")
+	text, err := os.ReadFile("testdata/commonsense")
 	if err != nil {
 		b.Fatal(err)
 	}
