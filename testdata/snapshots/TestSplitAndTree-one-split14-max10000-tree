@@ -1,0 +1,8 @@
+(*hashsplit.TreeNode)({
+  Offset: (uint64) 0,
+  Size: (uint64) 1,
+  Children: ([]*hashsplit.TreeNode) <nil>,
+  Chunks: ([][]uint8) (len=1) {
+    ([]uint8) <nil>
+  }
+})
