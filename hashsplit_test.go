@@ -14,7 +14,7 @@ func TestSplit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	var i int
 	split, errptr := Split(f)
@@ -77,7 +77,7 @@ func TestTree(t *testing.T) {
 
 	pr, pw := io.Pipe()
 	go func() {
-		defer pw.Close()
+		defer pw.Close() //nolint:errcheck
 		for chunk := range root.AllChunks() {
 			_, innerErr = pw.Write(chunk)
 			if innerErr != nil {
