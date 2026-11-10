@@ -71,6 +71,9 @@ type Splitter struct {
 
 // Split hashsplits its input using a default Splitter.
 // See [Splitter.Split].
+//
+// The returned error pointer may be dereferenced after consuming the iterator
+// to check for errors.
 func Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 	s := NewSplitter()
 	return s.Split(r)
@@ -102,6 +105,9 @@ func NewSplitter() *Splitter {
 // to see if any call to the underlying reader produced an error.
 //
 // The Splitter should not be reused for another stream after this call.
+//
+// The returned error pointer may be dereferenced after consuming the iterator
+// to check for errors.
 func (s *Splitter) Split(r io.Reader) (iter.Seq2[[]byte, int], *error) {
 	var br io.ByteReader
 	if b, ok := r.(io.ByteReader); ok {
